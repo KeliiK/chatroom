@@ -4,8 +4,10 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -33,7 +35,11 @@ public class JavaExampleServer {
     private volatile boolean running;
     private final AtomicInteger clientCount = new AtomicInteger(0);
     private static final List<OutputStream> outputStreamList = new ArrayList<>();
-
+    
+    private static final Queue<String> messageHistory = new ArrayDeque<>();
+    private static final int MAX_HISTORY_SIZE = 20;
+    private static final Object historyLock = new Object();
+    private static int numOfClients = 0;
 
     public JavaExampleServer(String host, int port) {
         this.host = host;
@@ -51,8 +57,9 @@ public class JavaExampleServer {
         System.out.println("Listening on " + host + ":" + port);
         System.out.println("\nThis is an EXAMPLE server, NOT the chat protocol!");
         System.out.println("\nSupported commands:");
-        System.out.println("  HELO:length:name  - Get a greeting");
-        System.out.println("  ECHO:length:text   - Echo back text");
+        System.out.println("  NAME:length:name   - send back new username  ");
+        System.out.println("  SEND:length:text   - Send back text");
+        System.out.println("  HIST:length:text   - send back messages");
         System.out.println("  TIME:0:            - Get server time");
         System.out.println("  QUIT:0:            - Disconnect");
         System.out.println("\nPress Ctrl+C to stop.");
@@ -67,6 +74,7 @@ public class JavaExampleServer {
                 System.out.println("\n[Client " + clientId + "] Connected from " + address);
 
                 // Handle each client in a separate thread
+                numOfClients++;
                 Thread clientThread = new Thread(new ClientHandler(clientSocket, clientId));
                 clientThread.setDaemon(true);
                 clientThread.start();
@@ -92,12 +100,28 @@ public class JavaExampleServer {
         System.out.println("Server stopped.");
     }
 
+    private static void addToHistory(String message) {
+        synchronized (historyLock) {
+            messageHistory.add(message);
+            if (messageHistory.size() > MAX_HISTORY_SIZE) {
+                messageHistory.remove();
+            }
+        }
+    }
+    
+    private static List<String> getHistory() {
+        synchronized (historyLock) {
+            return new ArrayList<>(messageHistory);
+        }
+    }
+    
     /**
      * Handler for individual client connections
      */
     private class ClientHandler implements Runnable {
         private final Socket socket;
         private final int clientId;
+        private String username = "user" + numOfClients;
 
         public ClientHandler(Socket socket, int clientId) {
             this.socket = socket;
@@ -122,6 +146,7 @@ public class JavaExampleServer {
                     }
 
                     String valueStr = new String(message.value, StandardCharsets.UTF_8);
+                    
                     System.out.println("[Client " + clientId + "] Received: " +
                         message.key + ":" + message.value.length + ":" + valueStr);
 
@@ -133,12 +158,13 @@ public class JavaExampleServer {
 
                     System.out.println("[DEBUG] Raw bytes sent: " + JavaExampleServer.bytesToHex(response));
 
-                    // Broadcast response to all clients
-                    broadCastResponse(response);
-
-                    KLVExample.KLVMessage respMsg = KLVExample.decodeKLV(response);
-                    System.out.println("[Client " + clientId + "] Broadcast: " +
-                        respMsg.key + ":" + respMsg.value.length);
+                    if (message.key.equals("HIST")) {
+                        output.write(response);
+                        output.flush();
+                    } else {
+                        broadCastResponse(response);
+                        addToHistory(valueStr);
+                    }
 
                     // If it was a quit, disconnect
                     if (message.key.equals("QUIT")) {
@@ -166,21 +192,38 @@ public class JavaExampleServer {
 
         private byte[] processCommand(String key, byte[] value) throws Exception {
             switch (key) {
-                case "HELO":
+                case "JOIN":
+                    String joinMsg = username + " joined";
+                    return KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
+                case "NAME":
                     String name = new String(value, StandardCharsets.UTF_8);
-                    String greeting = "Hello, " + name + "!";
-                    return KLVExample.encodeKLV("WELC", greeting.getBytes(StandardCharsets.UTF_8));
+                    String greeting = username + " has changed their name to " + name;
+                    username = name;
+                    return KLVExample.encodeKLV("NAME", greeting.getBytes(StandardCharsets.UTF_8));
 
-                case "ECHO":
-                    return KLVExample.encodeKLV("ECHO", value);
+                case "SEND":
+                    String valueStr = new String(value, StandardCharsets.UTF_8);
+                    valueStr = username + ":\t" + valueStr;
+                    return KLVExample.encodeKLV("SEND", valueStr.getBytes(StandardCharsets.UTF_8));
 
                 case "TIME":
                     String timestamp = LocalDateTime.now().format(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                     return KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
-
+                    
+                case "HIST":
+                    List<String> history = getHistory();
+                    String historyText;
+                    if (history.isEmpty()) {
+                        historyText = "No message history available.";
+                    } else {
+                        historyText = String.join("\n", history);
+                    }
+                    return KLVExample.encodeKLV("HIST", historyText.getBytes(StandardCharsets.UTF_8));
+                    
                 case "QUIT":
-                    return KLVExample.encodeKLV("QUIT", "Goodbye!".getBytes(StandardCharsets.UTF_8));
+                    String leaving = username + " has left :(";
+                    return KLVExample.encodeKLV("QUIT", leaving.getBytes(StandardCharsets.UTF_8));
 
                 default:
                     String error = "Unknown command: " + key;
@@ -233,6 +276,7 @@ public class JavaExampleServer {
                 }
                 totalRead += bytesRead;
             }
+
 
             return data;
         }

@@ -25,10 +25,18 @@ public class JavaExampleClient {
     private Socket socket;
     private InputStream input;
     private OutputStream output;
+    private ClientGui gui;
 
     public JavaExampleClient(String host, int port) {
         this.host = host;
         this.port = port;
+    }
+    
+    /**
+     * Set the GUI reference for displaying messages
+     */
+    public void setGui(ClientGui gui) {
+        this.gui = gui;
     }
 
     public boolean connect() {
@@ -42,8 +50,9 @@ public class JavaExampleClient {
             System.out.println("=".repeat(70));
             System.out.println("\nThis is an EXAMPLE client, NOT the chat protocol!");
             System.out.println("\nAvailable commands:");
-            System.out.println("  helo <name>  - Get a heloing from server");
-            System.out.println("  echo <text>   - Echo text back");
+            System.out.println("  name <new name>  - Change username");
+            System.out.println("  send <text>   - Send text back");
+            System.out.println("  hist          - Get last 20 messages");
             System.out.println("  time          - Get server time");
             System.out.println("  quit          - Disconnect");
             System.out.println("=".repeat(70));
@@ -57,7 +66,6 @@ public class JavaExampleClient {
 
     public void send(String key, String valueStr) {
         try {
-            // Encode and send
             byte[] message = KLVExample.encodeKLV(key,
                 valueStr.getBytes(StandardCharsets.UTF_8));
 
@@ -124,25 +132,30 @@ public class JavaExampleClient {
     public void interactiveMode() {
         Scanner scanner = new Scanner(System.in);
 
-        // Start listening thread to continuously receive messages from server
         Thread listener = new Thread(() -> {
             try {
                 System.out.println("[Listener] Thread started, waiting for messages...");
                 while (socket != null && !socket.isClosed()) {
                     KLVMessage message = readKLVFromSocket();
                     if (message == null) {
-                        // Connection closed
                         System.out.println("[Listener] Connection closed, exiting listener thread");
+                        if (gui != null) {
+                            gui.closeWindow();
+                        }
                         break;
                     }
                     
                     String respText = new String(message.value, StandardCharsets.UTF_8);
                     System.out.println("\n← Received: " + message.key + ":" +
                         message.value.length + ":" + respText);
-                    System.out.print("> "); // Re-print prompt after receiving message
+
+                    if (gui != null) {
+                        gui.appendMessage(respText);
+                    }
+           
+                    System.out.print("> ");
                 }
             } catch (Exception e) {
-                // Print error details for debugging
                 System.err.println("\n! Listening error: " + e.getMessage());
                 e.printStackTrace();
             }
@@ -150,6 +163,7 @@ public class JavaExampleClient {
         listener.setDaemon(true);
         listener.start();
 
+        send("JOIN", "");
         while (true) {
             try {
                 System.out.print("\n> ");
@@ -167,31 +181,36 @@ public class JavaExampleClient {
                         System.out.println("\nSending QUIT command...");
                         send("QUIT", "");
                         System.out.println("Disconnecting...");
+                        if (gui != null) {
+                            gui.closeWindow();
+                        }
                         return;
 
-                    case "helo":
+                    case "name":
                         if (parts.length < 2) {
-                            System.out.println("Usage: helo <name>");
+                            System.out.println("Usage: name <new name>");
                             continue;
                         }
-                        send("HELO", parts[1]);
+                        send("NAME", parts[1]);
                         break;
 
-                    case "echo":
+                    case "send":
                         if (parts.length < 2) {
-                            System.out.println("Usage: echo <text>");
+                            System.out.println("Usage: send <text>");
                             continue;
                         }
-                        send("ECHO", parts[1]);
+                        send("SEND", parts[1]);
                         break;
 
                     case "time":
                         send("TIME", "");
                         break;
-
+                    case "hist":
+                        send("HIST", "");
+                        break;
                     default:
                         System.out.println("Unknown command: " + command);
-                        System.out.println("Available: helo, echo, time, quit");
+                        System.out.println("Available: name, send, time, hist, quit");
                 }
 
             } catch (Exception e) {
@@ -203,74 +222,12 @@ public class JavaExampleClient {
         scanner.close();
     }
 
-    public void demoMode() {
-        System.out.println("\n" + "=".repeat(70));
-        System.out.println("DEMO MODE - Sending Example Commands");
-        System.out.println("=".repeat(70));
-
-        // Start listening thread for demo mode too
-        Thread listener = new Thread(() -> {
-            try {
-                while (socket != null && !socket.isClosed()) {
-                    KLVMessage message = readKLVFromSocket();
-                    if (message == null) {
-                        break;
-                    }
-                    String respText = new String(message.value, StandardCharsets.UTF_8);
-                    System.out.println("\n← Received: " + message.key + ":" +
-                        message.value.length + ":" + respText);
-                }
-            } catch (Exception e) {
-                // Only print error if socket is still open (connection was closed intentionally)
-                if (socket != null && !socket.isClosed()) {
-                    System.err.println("\n! Listening error: " + e.getMessage());
-                }
-            }
-        });
-        listener.setDaemon(true);
-        listener.start();
-
-        try {
-            // Test HELO
-            System.out.println("\n[1] Testing HELO command:");
-            send("HELO", "Alice");
-            Thread.sleep(500); // Give time for response
-
-            // Test ECHO
-            System.out.println("\n[2] Testing ECHO command:");
-            send("ECHO", "Hello, World!");
-            Thread.sleep(500);
-
-            // Test TIME
-            System.out.println("\n[3] Testing TIME command:");
-            send("TIME", "");
-            Thread.sleep(500);
-
-            // Test unknown command
-            System.out.println("\n[4] Testing unknown command (error handling):");
-            send("UNKN", "test");
-            Thread.sleep(500);
-
-            // QUIT
-            System.out.println("\n[5] Sending QUIT:");
-            send("QUIT", "");
-            Thread.sleep(500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        System.out.println("\n" + "=".repeat(70));
-        System.out.println("Demo complete!");
-        System.out.println("=".repeat(70));
-    }
-
     public void close() {
         try {
             if (socket != null && !socket.isClosed()) {
                 socket.close();
             }
         } catch (IOException e) {
-            // Ignore
         }
     }
 
@@ -336,19 +293,17 @@ public class JavaExampleClient {
             mode = args[2];
         }
 
-        // Create and connect client
         JavaExampleClient client = new JavaExampleClient(host, port);
+        
+        ClientGui gui = new ClientGui(host, port);
+        client.setGui(gui);
 
         if (!client.connect()) {
             System.exit(1);
         }
 
         try {
-            if (mode.equals("demo")) {
-                client.demoMode();
-            } else {
-                client.interactiveMode();
-            }
+            client.interactiveMode();
         } finally {
             client.close();
         }

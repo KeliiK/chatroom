@@ -4,6 +4,7 @@ import javax.swing.*;
 
 public class ClientGui extends JFrame {
     boolean dark = false;
+    private JTextArea chatArea;
 
     public ClientGui(String host, int port) {
         super("ClientGui");
@@ -31,7 +32,7 @@ public class ClientGui extends JFrame {
         main.add(header, BorderLayout.NORTH);
 
         //chat area
-        JTextArea chatArea = new JTextArea();
+        chatArea = new JTextArea();
         chatArea.setEditable(false);
 
         JScrollPane scroll = new JScrollPane(chatArea);
@@ -116,6 +117,21 @@ public class ClientGui extends JFrame {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
         setVisible(true);
+    }
+
+    public void appendMessage(String message) {
+        SwingUtilities.invokeLater(() -> {
+            // TODO: Add your logic here to append message to chatArea
+            chatArea.append(message + "\n");
+            // Auto-scroll to bottom
+            chatArea.setCaretPosition(chatArea.getDocument().getLength());
+        });
+    }
+
+    public void closeWindow() {
+        SwingUtilities.invokeLater(() -> {
+            dispose();
+        });
     }
 
     public static void main(String[] args) {
