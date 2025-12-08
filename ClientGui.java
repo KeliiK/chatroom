@@ -121,9 +121,7 @@ public class ClientGui extends JFrame {
 
     public void appendMessage(String message) {
         SwingUtilities.invokeLater(() -> {
-            // TODO: Add your logic here to append message to chatArea
             chatArea.append(message + "\n");
-            // Auto-scroll to bottom
             chatArea.setCaretPosition(chatArea.getDocument().getLength());
         });
     }
