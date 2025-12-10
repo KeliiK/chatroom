@@ -1,0 +1,44 @@
+<changelist name="Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1" date="1765400776278" recycled="true" deleted="true">
+  <option name="PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/shelved.patch" />
+  <option name="DESCRIPTION" value="Uncommitted changes before Checkout at 12/10/25, 2:06 PM [Changes]" />
+  <binary>
+    <option name="BEFORE_PATH" value="KLVExample$KLVMessage.class" />
+    <option name="AFTER_PATH" value="KLVExample$KLVMessage.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/KLVExample$KLVMessage.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleClient$KLVMessage.class" />
+    <option name="AFTER_PATH" value="JavaExampleClient$KLVMessage.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleClient$KLVMessage.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleClient.class" />
+    <option name="AFTER_PATH" value="JavaExampleClient.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleClient.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="KLVExample.class" />
+    <option name="AFTER_PATH" value="KLVExample.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/KLVExample.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleServer$KLVMessage.class" />
+    <option name="AFTER_PATH" value="JavaExampleServer$KLVMessage.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleServer$KLVMessage.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleClient$KLVResponse.class" />
+    <option name="AFTER_PATH" value="JavaExampleClient$KLVResponse.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleClient$KLVResponse.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleServer$ClientHandler.class" />
+    <option name="AFTER_PATH" value="JavaExampleServer$ClientHandler.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleServer$ClientHandler.class" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="JavaExampleServer.class" />
+    <option name="AFTER_PATH" value="JavaExampleServer.class" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Checkout_at_12_10_25,_2_06 PM_[Changes]1/JavaExampleServer.class" />
+  </binary>
+</changelist>

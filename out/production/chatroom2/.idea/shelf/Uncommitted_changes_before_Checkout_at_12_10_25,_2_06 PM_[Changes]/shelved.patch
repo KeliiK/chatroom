@@ -1,0 +1,1112 @@
+Index: JavaExampleServer.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import java.io.*;\nimport java.net.*;\nimport java.nio.ByteBuffer;\nimport java.nio.charset.StandardCharsets;\nimport java.time.LocalDateTime;\nimport java.time.format.DateTimeFormatter;\nimport java.util.ArrayDeque;\nimport java.util.ArrayList;\nimport java.util.List;\nimport java.util.Queue;\nimport java.util.concurrent.atomic.AtomicInteger;\n\n/**\n * Java KLV Example Server - Educational Demo\n *\n * This server implements a SIMPLE protocol using KLV that is NOT the chat protocol.\n * It demonstrates:\n * - Multi-threaded client handling\n * - KLV encoding/decoding over sockets\n * - Basic request/response pattern\n *\n * Protocol Commands (NOT your assignment!):\n * - HELO:length:name → Server responds WELC:length:Hello, name!\n * - ECHO:length:text → Server responds ECHO:length:text\n * - TIME:0: → Server responds TIME:length:timestamp\n * - QUIT:0: → Server disconnects client\n *\n * Students should study this architecture and apply it to their chat protocol.\n */\npublic class JavaExampleServer {\n\n    private final String host;\n    private final int port;\n    private ServerSocket serverSocket;\n    private volatile boolean running;\n    private final AtomicInteger clientCount = new AtomicInteger(0);\n    private static final List<OutputStream> outputStreamList = new ArrayList<>();\n\n    private static final Queue<String> messageHistory = new ArrayDeque<>();\n    private static final int MAX_HISTORY_SIZE = 20;\n    private static final Object historyLock = new Object();\n    private static int numOfClients = 0;\n\n    public JavaExampleServer(String host, int port) {\n        this.host = host;\n        this.port = port;\n        this.running = false;\n    }\n\n    public void start() throws IOException {\n        serverSocket = new ServerSocket(port);\n        running = true;\n\n        System.out.println(\"=\".repeat(70));\n        System.out.println(\"Java KLV Example Server\");\n        System.out.println(\"=\".repeat(70));\n        System.out.println(\"Listening on \" + host + \":\" + port);\n        System.out.println(\"\\nThis is an EXAMPLE server, NOT the chat protocol!\");\n        System.out.println(\"\\nSupported commands:\");\n        System.out.println(\"  NAME:length:name   - send back new username  \");\n        System.out.println(\"  SEND:length:text   - Send back text\");\n        System.out.println(\"  HIST:length:text   - send back messages\");\n        System.out.println(\"  TIME:0:            - Get server time\");\n        System.out.println(\"  QUIT:0:            - Disconnect\");\n        System.out.println(\"\\nPress Ctrl+C to stop.\");\n        System.out.println(\"=\".repeat(70));\n\n        while (running) {\n            try {\n                Socket clientSocket = serverSocket.accept();\n                int clientId = clientCount.incrementAndGet();\n\n                InetSocketAddress address = (InetSocketAddress) clientSocket.getRemoteSocketAddress();\n                System.out.println(\"\\n[Client \" + clientId + \"] Connected from \" + address);\n\n                // Handle each client in a separate thread\n                numOfClients++;\n                Thread clientThread = new Thread(new ClientHandler(clientSocket, clientId));\n                clientThread.setDaemon(true);\n                clientThread.start();\n\n\n            } catch (IOException e) {\n                if (running) {\n                    System.err.println(\"Error accepting connection: \" + e.getMessage());\n                }\n            }\n        }\n    }\n\n    public void stop() {\n        running = false;\n        try {\n            if (serverSocket != null && !serverSocket.isClosed()) {\n                serverSocket.close();\n            }\n        } catch (IOException e) {\n            System.err.println(\"Error closing server: \" + e.getMessage());\n        }\n        System.out.println(\"Server stopped.\");\n    }\n\n    private static void addToHistory(String message) {\n        synchronized (historyLock) {\n            messageHistory.add(message);\n            if (messageHistory.size() > MAX_HISTORY_SIZE) {\n                messageHistory.remove();\n            }\n        }\n    }\n\n    private static List<String> getHistory() {\n        synchronized (historyLock) {\n            return new ArrayList<>(messageHistory);\n        }\n    }\n\n    /**\n     * Handler for individual client connections\n     */\n    private class ClientHandler implements Runnable {\n        private final Socket socket;\n        private final int clientId;\n        private String username = \"user\" + numOfClients;\n\n        public ClientHandler(Socket socket, int clientId) {\n            this.socket = socket;\n            this.clientId = clientId;\n        }\n\n        @Override\n        public void run() {\n            OutputStream output = null;\n            try {\n                InputStream input = socket.getInputStream();\n                output = socket.getOutputStream();\n                synchronized (outputStreamList) {\n                    outputStreamList.add(output);\n                }\n\n                while (running && !socket.isClosed()) {\n                    // Read KLV message\n                    KLVMessage message = readKLVFromSocket(input);\n                    if (message == null) {\n                        break; // Connection closed\n                    }\n\n                    String valueStr = new String(message.value, StandardCharsets.UTF_8);\n\n                    System.out.println(\"[Client \" + clientId + \"] Received: \" +\n                            message.key + \":\" + message.value.length + \":\" + valueStr);\n\n                    // Process command\n                    byte[] response = processCommand(message.key, message.value);\n                    if (response == null) {\n                        break; // Client requested quit\n                    }\n\n                    System.out.println(\"[DEBUG] Raw bytes sent: \" + JavaExampleServer.bytesToHex(response));\n\n                    if (message.key.equals(\"HIST\")) {\n                        output.write(response);\n                        output.flush();\n                    } else {\n                        broadCastResponse(response);\n                        addToHistory(valueStr);\n                    }\n\n                    // If it was a quit, disconnect\n                    if (message.key.equals(\"QUIT\")) {\n                        break;\n                    }\n                }\n\n            } catch (Exception e) {\n                System.err.println(\"[Client \" + clientId + \"] Error: \" + e.getMessage());\n            } finally {\n                // Remove this client's output stream from the list\n                if (output != null) {\n                    synchronized (outputStreamList) {\n                        outputStreamList.remove(output);\n                    }\n                }\n                try {\n                    socket.close();\n                } catch (IOException e) {\n                    // Ignore\n                }\n                System.out.println(\"[Client \" + clientId + \"] Disconnected\");\n            }\n        }\n\n        private byte[] processCommand(String key, byte[] value) throws Exception {\n            switch (key) {\n                case \"JOIN\":\n                    String joinMsg = username + \" joined\";\n                    return KLVExample.encodeKLV(\"JOIN\", joinMsg.getBytes(StandardCharsets.UTF_8));\n                case \"NAME\":\n                    String name = new String(value, StandardCharsets.UTF_8);\n                    String greeting = username + \" has changed their name to \" + name;\n                    username = name;\n                    return KLVExample.encodeKLV(\"NAME\", greeting.getBytes(StandardCharsets.UTF_8));\n\n                case \"SEND\":\n                    String valueStr = new String(value, StandardCharsets.UTF_8);\n                    valueStr = username + \":\\t\" + valueStr;\n                    return KLVExample.encodeKLV(\"SEND\", valueStr.getBytes(StandardCharsets.UTF_8));\n\n                case \"TIME\":\n                    String timestamp = LocalDateTime.now().format(\n                            DateTimeFormatter.ofPattern(\"yyyy-MM-dd HH:mm:ss\"));\n                    return KLVExample.encodeKLV(\"TIME\", timestamp.getBytes(StandardCharsets.UTF_8));\n\n                case \"HIST\":\n                    List<String> history = getHistory();\n                    String historyText;\n                    if (history.isEmpty()) {\n                        historyText = \"No message history available.\";\n                    } else {\n                        historyText = String.join(\"\\n\", history);\n                    }\n                    return KLVExample.encodeKLV(\"HIST\", historyText.getBytes(StandardCharsets.UTF_8));\n\n                case \"QUIT\":\n                    String leaving = username + \" has left :(\";\n                    return KLVExample.encodeKLV(\"QUIT\", leaving.getBytes(StandardCharsets.UTF_8));\n\n                default:\n                    String error = \"Unknown command: \" + key;\n                    return KLVExample.encodeKLV(\"ERR\", error.getBytes(StandardCharsets.UTF_8));\n            }\n        }\n\n        private KLVMessage readKLVFromSocket(InputStream input) throws IOException {\n            // Read 4 bytes for key\n            byte[] keyBytes = recvExact(input, 4);\n            if (keyBytes == null) return null;\n\n            // Read 4 bytes for length\n            byte[] lengthBytes = recvExact(input, 4);\n            if (lengthBytes == null) return null;\n\n            ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);\n            int length = lengthBuffer.getInt();\n\n            // Read exact value bytes\n            byte[] valueBytes = recvExact(input, length);\n            if (valueBytes == null) return null;\n\n            // Parse key (remove null padding)\n            int keyLength = 4;\n            for (int i = 0; i < 4; i++) {\n                if (keyBytes[i] == 0) {\n                    keyLength = i;\n                    break;\n                }\n            }\n            String key = new String(keyBytes, 0, keyLength, StandardCharsets.US_ASCII);\n\n            return new KLVMessage(key, valueBytes);\n        }\n\n        /**\n         * Receive exactly numBytes from input stream.\n         * IMPORTANT: InputStream.read() may return fewer bytes than requested!\n         * Always loop until you have all bytes.\n         */\n        private byte[] recvExact(InputStream input, int numBytes) throws IOException {\n            byte[] data = new byte[numBytes];\n            int totalRead = 0;\n\n            while (totalRead < numBytes) {\n                int bytesRead = input.read(data, totalRead, numBytes - totalRead);\n                if (bytesRead == -1) {\n                    return null; // Connection closed\n                }\n                totalRead += bytesRead;\n            }\n\n\n            return data;\n        }\n    }\n\n    /**\n     * Convert byte array to hex string with spaces between bytes.\n     * Example: [0x48, 0x45, 0x4C, 0x4F] -> \"48 45 4c 4f\"\n     */\n    public static String bytesToHex(byte[] bytes) {\n        StringBuilder sb = new StringBuilder();\n        for (int i = 0; i < bytes.length; i++) {\n            if (i > 0) {\n                sb.append(' ');\n            }\n            sb.append(String.format(\"%02x\", bytes[i]));\n        }\n        return sb.toString();\n    }\n\n    /**\n     * Simple KLV message structure\n     */\n    static class KLVMessage {\n        String key;\n        byte[] value;\n\n        KLVMessage(String key, byte[] value) {\n            this.key = key;\n            this.value = value;\n        }\n    }\n\n\n    public static void broadCastResponse(byte[] response) {\n        synchronized (outputStreamList) {\n            System.out.println(\"[Broadcast] Sending to \" + outputStreamList.size() + \" client(s)\");\n            // Use iterator to safely remove dead streams while iterating\n            outputStreamList.removeIf(output -> {\n                try {\n                    output.write(response);\n                    output.flush();\n                    System.out.println(\"[Broadcast] Successfully sent to one client\");\n                    return false; // Keep this stream\n                } catch (Exception e) {\n                    // Stream is dead, remove it\n                    System.err.println(\"[Broadcast] Failed to send to client: \" + e.getMessage());\n                    return true;\n                }\n            });\n            System.out.println(\"[Broadcast] Remaining clients: \" + outputStreamList.size());\n        }\n    }\n\n    public static void main(String[] args) {\n        int port = 9001;\n\n        if (args.length > 0) {\n            try {\n                port = Integer.parseInt(args[0]);\n            } catch (NumberFormatException e) {\n                System.err.println(\"Invalid port: \" + args[0]);\n                System.exit(1);\n            }\n        }\n\n        JavaExampleServer server = new JavaExampleServer(\"0.0.0.0\", port);\n\n        // Handle Ctrl+C gracefully\n        Runtime.getRuntime().addShutdownHook(new Thread(() -> {\n            System.out.println(\"\\n\\nShutting down server...\");\n            server.stop();\n        }));\n\n        try {\n            server.start();\n        } catch (IOException e) {\n            System.err.println(\"Server error: \" + e.getMessage());\n            System.exit(1);\n        }\n    }\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/JavaExampleServer.java b/JavaExampleServer.java
+--- a/JavaExampleServer.java	(revision eeaee4cc4f49619a453a57f4c43ba746f3199dc4)
++++ b/JavaExampleServer.java	(date 1765397216978)
+@@ -10,23 +10,6 @@
+ import java.util.Queue;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-/**
+- * Java KLV Example Server - Educational Demo
+- *
+- * This server implements a SIMPLE protocol using KLV that is NOT the chat protocol.
+- * It demonstrates:
+- * - Multi-threaded client handling
+- * - KLV encoding/decoding over sockets
+- * - Basic request/response pattern
+- *
+- * Protocol Commands (NOT your assignment!):
+- * - HELO:length:name → Server responds WELC:length:Hello, name!
+- * - ECHO:length:text → Server responds ECHO:length:text
+- * - TIME:0: → Server responds TIME:length:timestamp
+- * - QUIT:0: → Server disconnects client
+- *
+- * Students should study this architecture and apply it to their chat protocol.
+- */
+ public class JavaExampleServer {
+ 
+     private final String host;
+@@ -58,8 +41,8 @@
+         System.out.println("\nThis is an EXAMPLE server, NOT the chat protocol!");
+         System.out.println("\nSupported commands:");
+         System.out.println("  NAME:length:name   - send back new username  ");
+-        System.out.println("  SEND:length:text   - Send back text");
+-        System.out.println("  HIST:length:text   - send back messages");
++        System.out.println("  MSG:length:text    - Send back text");
++        System.out.println("  READ:length:text   - send back messages");
+         System.out.println("  TIME:0:            - Get server time");
+         System.out.println("  QUIT:0:            - Disconnect");
+         System.out.println("\nPress Ctrl+C to stop.");
+@@ -73,7 +56,6 @@
+                 InetSocketAddress address = (InetSocketAddress) clientSocket.getRemoteSocketAddress();
+                 System.out.println("\n[Client " + clientId + "] Connected from " + address);
+ 
+-                // Handle each client in a separate thread
+                 numOfClients++;
+                 Thread clientThread = new Thread(new ClientHandler(clientSocket, clientId));
+                 clientThread.setDaemon(true);
+@@ -115,9 +97,6 @@
+         }
+     }
+ 
+-    /**
+-     * Handler for individual client connections
+-     */
+     private class ClientHandler implements Runnable {
+         private final Socket socket;
+         private final int clientId;
+@@ -139,10 +118,9 @@
+                 }
+ 
+                 while (running && !socket.isClosed()) {
+-                    // Read KLV message
+                     KLVMessage message = readKLVFromSocket(input);
+                     if (message == null) {
+-                        break; // Connection closed
++                        break;
+                     }
+ 
+                     String valueStr = new String(message.value, StandardCharsets.UTF_8);
+@@ -150,23 +128,26 @@
+                     System.out.println("[Client " + clientId + "] Received: " +
+                             message.key + ":" + message.value.length + ":" + valueStr);
+ 
+-                    // Process command
+                     byte[] response = processCommand(message.key, message.value);
+                     if (response == null) {
+-                        break; // Client requested quit
++                        break;
+                     }
+ 
+                     System.out.println("[DEBUG] Raw bytes sent: " + JavaExampleServer.bytesToHex(response));
+ 
+-                    if (message.key.equals("HIST")) {
++                    if (message.key.equals("MSG")) {
++                        KLVExample.KLVMessage respMsg = KLVExample.decodeKLV(response);
++                        String responseValue = new String(respMsg.value, StandardCharsets.UTF_8);
++                        addToHistory(responseValue);
++                    }
++
++                    if (message.key.equals("READ")) {
+                         output.write(response);
+                         output.flush();
+                     } else {
+                         broadCastResponse(response);
+-                        addToHistory(valueStr);
+                     }
+ 
+-                    // If it was a quit, disconnect
+                     if (message.key.equals("QUIT")) {
+                         break;
+                     }
+@@ -175,7 +156,6 @@
+             } catch (Exception e) {
+                 System.err.println("[Client " + clientId + "] Error: " + e.getMessage());
+             } finally {
+-                // Remove this client's output stream from the list
+                 if (output != null) {
+                     synchronized (outputStreamList) {
+                         outputStreamList.remove(output);
+@@ -184,34 +164,37 @@
+                 try {
+                     socket.close();
+                 } catch (IOException e) {
+-                    // Ignore
+                 }
+                 System.out.println("[Client " + clientId + "] Disconnected");
+             }
+         }
+ 
+         private byte[] processCommand(String key, byte[] value) throws Exception {
++            String name = null;
+             switch (key) {
+                 case "JOIN":
++                    name = new String(value,  StandardCharsets.UTF_8);
++                    if (name.length() != 0)
++                        username = name;
+                     String joinMsg = username + " joined";
+                     return KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
+                 case "NAME":
+-                    String name = new String(value, StandardCharsets.UTF_8);
++                    name = new String(value, StandardCharsets.UTF_8);
+                     String greeting = username + " has changed their name to " + name;
+                     username = name;
+                     return KLVExample.encodeKLV("NAME", greeting.getBytes(StandardCharsets.UTF_8));
+ 
+-                case "SEND":
++                case "MSG":
+                     String valueStr = new String(value, StandardCharsets.UTF_8);
+                     valueStr = username + ":\t" + valueStr;
+-                    return KLVExample.encodeKLV("SEND", valueStr.getBytes(StandardCharsets.UTF_8));
++                    return KLVExample.encodeKLV("MSG", valueStr.getBytes(StandardCharsets.UTF_8));
+ 
+                 case "TIME":
+                     String timestamp = LocalDateTime.now().format(
+                             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                     return KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
+ 
+-                case "HIST":
++                case "READ":
+                     List<String> history = getHistory();
+                     String historyText;
+                     if (history.isEmpty()) {
+@@ -219,7 +202,7 @@
+                     } else {
+                         historyText = String.join("\n", history);
+                     }
+-                    return KLVExample.encodeKLV("HIST", historyText.getBytes(StandardCharsets.UTF_8));
++                    return KLVExample.encodeKLV("READ", historyText.getBytes(StandardCharsets.UTF_8));
+ 
+                 case "QUIT":
+                     String leaving = username + " has left :(";
+@@ -232,22 +215,18 @@
+         }
+ 
+         private KLVMessage readKLVFromSocket(InputStream input) throws IOException {
+-            // Read 4 bytes for key
+             byte[] keyBytes = recvExact(input, 4);
+             if (keyBytes == null) return null;
+ 
+-            // Read 4 bytes for length
+             byte[] lengthBytes = recvExact(input, 4);
+             if (lengthBytes == null) return null;
+ 
+             ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);
+             int length = lengthBuffer.getInt();
+ 
+-            // Read exact value bytes
+             byte[] valueBytes = recvExact(input, length);
+             if (valueBytes == null) return null;
+ 
+-            // Parse key (remove null padding)
+             int keyLength = 4;
+             for (int i = 0; i < 4; i++) {
+                 if (keyBytes[i] == 0) {
+@@ -260,11 +239,6 @@
+             return new KLVMessage(key, valueBytes);
+         }
+ 
+-        /**
+-         * Receive exactly numBytes from input stream.
+-         * IMPORTANT: InputStream.read() may return fewer bytes than requested!
+-         * Always loop until you have all bytes.
+-         */
+         private byte[] recvExact(InputStream input, int numBytes) throws IOException {
+             byte[] data = new byte[numBytes];
+             int totalRead = 0;
+@@ -272,7 +246,7 @@
+             while (totalRead < numBytes) {
+                 int bytesRead = input.read(data, totalRead, numBytes - totalRead);
+                 if (bytesRead == -1) {
+-                    return null; // Connection closed
++                    return null;
+                 }
+                 totalRead += bytesRead;
+             }
+@@ -282,10 +256,6 @@
+         }
+     }
+ 
+-    /**
+-     * Convert byte array to hex string with spaces between bytes.
+-     * Example: [0x48, 0x45, 0x4C, 0x4F] -> "48 45 4c 4f"
+-     */
+     public static String bytesToHex(byte[] bytes) {
+         StringBuilder sb = new StringBuilder();
+         for (int i = 0; i < bytes.length; i++) {
+@@ -297,9 +267,6 @@
+         return sb.toString();
+     }
+ 
+-    /**
+-     * Simple KLV message structure
+-     */
+     static class KLVMessage {
+         String key;
+         byte[] value;
+@@ -314,15 +281,13 @@
+     public static void broadCastResponse(byte[] response) {
+         synchronized (outputStreamList) {
+             System.out.println("[Broadcast] Sending to " + outputStreamList.size() + " client(s)");
+-            // Use iterator to safely remove dead streams while iterating
+             outputStreamList.removeIf(output -> {
+                 try {
+                     output.write(response);
+                     output.flush();
+                     System.out.println("[Broadcast] Successfully sent to one client");
+-                    return false; // Keep this stream
++                    return false;
+                 } catch (Exception e) {
+-                    // Stream is dead, remove it
+                     System.err.println("[Broadcast] Failed to send to client: " + e.getMessage());
+                     return true;
+                 }
+@@ -345,7 +310,6 @@
+ 
+         JavaExampleServer server = new JavaExampleServer("0.0.0.0", port);
+ 
+-        // Handle Ctrl+C gracefully
+         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+             System.out.println("\n\nShutting down server...");
+             server.stop();
+Index: JavaExampleClient.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import java.io.*;\nimport java.net.*;\nimport java.nio.ByteBuffer;\nimport java.nio.charset.StandardCharsets;\nimport java.time.LocalDateTime;\nimport java.time.format.DateTimeFormatter;\nimport java.util.Scanner;\n\n/**\n * Java KLV Example Client - Educational Demo\n *\n * This client connects to JavaExampleServer and demonstrates:\n * - Connecting to a server\n * - Sending KLV messages\n * - Receiving and parsing responses\n * - Interactive user input\n *\n * This is NOT the chat protocol - it's a simpler example to learn from.\n * Study this code and apply the patterns to your chat client!\n */\npublic class JavaExampleClient {\n\n    private final String host;\n    private final int port;\n    private Socket socket;\n    private InputStream input;\n    private OutputStream output;\n    private ClientGui gui;\n\n    public JavaExampleClient(String host, int port) {\n        this.host = host;\n        this.port = port;\n    }\n\n    /**\n     * Set the GUI reference for displaying messages\n     */\n    public void setGui(ClientGui gui) {\n        this.gui = gui;\n    }\n\n    public boolean connect() {\n        try {\n            socket = new Socket(host, port);\n            input = socket.getInputStream();\n            output = socket.getOutputStream();\n\n            System.out.println(\"=\".repeat(70));\n            System.out.println(\"Connected to \" + host + \":\" + port);\n            System.out.println(\"=\".repeat(70));\n            System.out.println(\"\\nThis is an EXAMPLE client, NOT the chat protocol!\");\n            System.out.println(\"\\nAvailable commands:\");\n            System.out.println(\"  name <new name>  - Change username\");\n            System.out.println(\"  send <text>   - Send text back\");\n            System.out.println(\"  hist          - Get last 20 messages\");\n            System.out.println(\"  time          - Get server time\");\n            System.out.println(\"  quit          - Disconnect\");\n            System.out.println(\"=\".repeat(70));\n            return true;\n\n        } catch (IOException e) {\n            System.err.println(\"Connection failed: \" + e.getMessage());\n            return false;\n        }\n    }\n\n    public void send(String key, String valueStr) {\n        try {\n            byte[] message = KLVExample.encodeKLV(key,\n                    valueStr.getBytes(StandardCharsets.UTF_8));\n\n            System.out.println(\"\\n→ Sending: \" + key + \":\" + valueStr.length() + \":\" + valueStr);\n            output.write(message);\n            System.out.println(\"Hex sent: \" + JavaExampleClient.bytesToHex(message));\n            output.flush();\n\n        } catch (Exception e) {\n            System.err.println(\"! Error sending: \" + e.getMessage());\n        }\n    }\n\n    private KLVMessage readKLVFromSocket() throws IOException {\n        // Read 4 bytes for key\n        byte[] keyBytes = recvExact(4);\n        if (keyBytes == null) return null;\n\n        // Read 4 bytes for length\n        byte[] lengthBytes = recvExact(4);\n        if (lengthBytes == null) return null;\n\n        ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);\n        int length = lengthBuffer.getInt();\n\n        // Read exact value bytes\n        byte[] valueBytes = recvExact(length);\n        if (valueBytes == null) return null;\n\n        // Parse key (remove null padding)\n        int keyLength = 4;\n        for (int i = 0; i < 4; i++) {\n            if (keyBytes[i] == 0) {\n                keyLength = i;\n                break;\n            }\n        }\n        String key = new String(keyBytes, 0, keyLength, StandardCharsets.US_ASCII);\n\n        return new KLVMessage(key, valueBytes);\n    }\n\n    /**\n     * Receive exactly numBytes from input stream.\n     *\n     * CRITICAL: InputStream.read() may return fewer bytes than requested!\n     * You MUST loop until you have all bytes.\n     */\n    private byte[] recvExact(int numBytes) throws IOException {\n        byte[] data = new byte[numBytes];\n        int totalRead = 0;\n\n        while (totalRead < numBytes) {\n            int bytesRead = input.read(data, totalRead, numBytes - totalRead);\n            if (bytesRead == -1) {\n                return null; // Connection closed\n            }\n            totalRead += bytesRead;\n        }\n\n        return data;\n    }\n\n    public void interactiveMode() {\n        Scanner scanner = new Scanner(System.in);\n\n        Thread listener = new Thread(() -> {\n            try {\n                System.out.println(\"[Listener] Thread started, waiting for messages...\");\n                while (socket != null && !socket.isClosed()) {\n                    KLVMessage message = readKLVFromSocket();\n                    if (message == null) {\n                        System.out.println(\"[Listener] Connection closed, exiting listener thread\");\n                        if (gui != null) {\n                            gui.closeWindow();\n                        }\n                        break;\n                    }\n\n                    String respText = new String(message.value, StandardCharsets.UTF_8);\n                    System.out.println(\"\\n← Received: \" + message.key + \":\" +\n                            message.value.length + \":\" + respText);\n\n                    if (gui != null) {\n                        gui.appendMessage(respText);\n                    }\n\n                    System.out.print(\"> \");\n                }\n            } catch (Exception e) {\n                System.err.println(\"\\n! Listening error: \" + e.getMessage());\n                e.printStackTrace();\n            }\n        });\n        listener.setDaemon(true);\n        listener.start();\n\n        send(\"JOIN\", \"\");\n        while (true) {\n            try {\n                System.out.print(\"\\n> \");\n                String userInput = scanner.nextLine().trim();\n\n                if (userInput.isEmpty()) {\n                    continue;\n                }\n\n                String[] parts = userInput.split(\"\\\\s+\", 2);\n                String command = parts[0].toLowerCase();\n\n                switch (command) {\n                    case \"quit\":\n                        System.out.println(\"\\nSending QUIT command...\");\n                        send(\"QUIT\", \"\");\n                        System.out.println(\"Disconnecting...\");\n                        if (gui != null) {\n                            gui.closeWindow();\n                        }\n                        return;\n\n                    case \"name\":\n                        if (parts.length < 2) {\n                            System.out.println(\"Usage: name <new name>\");\n                            continue;\n                        }\n                        send(\"NAME\", parts[1]);\n                        break;\n\n                    case \"send\":\n                        if (parts.length < 2) {\n                            System.out.println(\"Usage: send <text>\");\n                            continue;\n                        }\n                        send(\"SEND\", parts[1]);\n                        break;\n\n                    case \"time\":\n                        send(\"TIME\", \"\");\n                        break;\n                    case \"hist\":\n                        send(\"HIST\", \"\");\n                        break;\n                    default:\n                        System.out.println(\"Unknown command: \" + command);\n                        System.out.println(\"Available: name, send, time, hist, quit\");\n                }\n\n            } catch (Exception e) {\n                System.err.println(\"Error: \" + e.getMessage());\n                break;\n            }\n        }\n\n        scanner.close();\n    }\n\n    public void close() {\n        try {\n            if (socket != null && !socket.isClosed()) {\n                socket.close();\n            }\n        } catch (IOException e) {\n        }\n    }\n\n    /**\n     * Convert byte array to hex string with spaces between bytes.\n     * Example: [0x48, 0x45, 0x4C, 0x4F] -> \"48 45 4c 4f\"\n     */\n    public static String bytesToHex(byte[] bytes) {\n        StringBuilder sb = new StringBuilder();\n        for (int i = 0; i < bytes.length; i++) {\n            if (i > 0) {\n                sb.append(' ');\n            }\n            sb.append(String.format(\"%02x\", bytes[i]));\n        }\n        return sb.toString();\n    }\n\n    /**\n     * Simple KLV message structure\n     */\n    static class KLVMessage {\n        String key;\n        byte[] value;\n\n        KLVMessage(String key, byte[] value) {\n            this.key = key;\n            this.value = value;\n        }\n    }\n\n    /**\n     * Represents a parsed response\n     */\n    static class KLVResponse {\n        String key;\n        String text;\n\n        KLVResponse(String key, String text) {\n            this.key = key;\n            this.text = text;\n        }\n    }\n\n    public static void main(String[] args) {\n        String host = \"localhost\";\n        int port = 9001;\n        String mode = \"interactive\";\n\n        // Parse arguments\n        if (args.length > 0) {\n            host = args[0];\n        }\n        if (args.length > 1) {\n            try {\n                port = Integer.parseInt(args[1]);\n            } catch (NumberFormatException e) {\n                System.err.println(\"Invalid port: \" + args[1]);\n                System.exit(1);\n            }\n        }\n        if (args.length > 2) {\n            mode = args[2];\n        }\n\n        JavaExampleClient client = new JavaExampleClient(host, port);\n\n        ClientGui gui = new ClientGui(host, port);\n        client.setGui(gui);\n\n        if (!client.connect()) {\n            System.exit(1);\n        }\n\n        try {\n            client.interactiveMode();\n        } finally {\n            client.close();\n        }\n\n        System.out.println(\"\\nDisconnected.\");\n    }\n}
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/JavaExampleClient.java b/JavaExampleClient.java
+--- a/JavaExampleClient.java	(revision eeaee4cc4f49619a453a57f4c43ba746f3199dc4)
++++ b/JavaExampleClient.java	(date 1765397200773)
+@@ -6,18 +6,6 @@
+ import java.time.format.DateTimeFormatter;
+ import java.util.Scanner;
+ 
+-/**
+- * Java KLV Example Client - Educational Demo
+- *
+- * This client connects to JavaExampleServer and demonstrates:
+- * - Connecting to a server
+- * - Sending KLV messages
+- * - Receiving and parsing responses
+- * - Interactive user input
+- *
+- * This is NOT the chat protocol - it's a simpler example to learn from.
+- * Study this code and apply the patterns to your chat client!
+- */
+ public class JavaExampleClient {
+ 
+     private final String host;
+@@ -26,15 +14,13 @@
+     private InputStream input;
+     private OutputStream output;
+     private ClientGui gui;
++    private static String username;
+ 
+     public JavaExampleClient(String host, int port) {
+         this.host = host;
+         this.port = port;
+     }
+ 
+-    /**
+-     * Set the GUI reference for displaying messages
+-     */
+     public void setGui(ClientGui gui) {
+         this.gui = gui;
+     }
+@@ -51,8 +37,8 @@
+             System.out.println("\nThis is an EXAMPLE client, NOT the chat protocol!");
+             System.out.println("\nAvailable commands:");
+             System.out.println("  name <new name>  - Change username");
+-            System.out.println("  send <text>   - Send text back");
+-            System.out.println("  hist          - Get last 20 messages");
++            System.out.println("  msg <text>    - send message");
++            System.out.println("  read          - Get last 20 messages");
+             System.out.println("  time          - Get server time");
+             System.out.println("  quit          - Disconnect");
+             System.out.println("=".repeat(70));
+@@ -80,22 +66,18 @@
+     }
+ 
+     private KLVMessage readKLVFromSocket() throws IOException {
+-        // Read 4 bytes for key
+         byte[] keyBytes = recvExact(4);
+         if (keyBytes == null) return null;
+ 
+-        // Read 4 bytes for length
+         byte[] lengthBytes = recvExact(4);
+         if (lengthBytes == null) return null;
+ 
+         ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);
+         int length = lengthBuffer.getInt();
+ 
+-        // Read exact value bytes
+         byte[] valueBytes = recvExact(length);
+         if (valueBytes == null) return null;
+ 
+-        // Parse key (remove null padding)
+         int keyLength = 4;
+         for (int i = 0; i < 4; i++) {
+             if (keyBytes[i] == 0) {
+@@ -108,12 +90,6 @@
+         return new KLVMessage(key, valueBytes);
+     }
+ 
+-    /**
+-     * Receive exactly numBytes from input stream.
+-     *
+-     * CRITICAL: InputStream.read() may return fewer bytes than requested!
+-     * You MUST loop until you have all bytes.
+-     */
+     private byte[] recvExact(int numBytes) throws IOException {
+         byte[] data = new byte[numBytes];
+         int totalRead = 0;
+@@ -121,7 +97,7 @@
+         while (totalRead < numBytes) {
+             int bytesRead = input.read(data, totalRead, numBytes - totalRead);
+             if (bytesRead == -1) {
+-                return null; // Connection closed
++                return null;
+             }
+             totalRead += bytesRead;
+         }
+@@ -129,7 +105,7 @@
+         return data;
+     }
+ 
+-    public void interactiveMode() {
++    public void chatRoom() {
+         Scanner scanner = new Scanner(System.in);
+ 
+         Thread listener = new Thread(() -> {
+@@ -150,7 +126,25 @@
+                             message.value.length + ":" + respText);
+ 
+                     if (gui != null) {
+-                        gui.appendMessage(respText);
++                        if (message.key.equals("NAME")) {
++                            String[] parts = respText.split(" has changed their name to ");
++                            if (parts.length == 2) {
++                                String oldName = parts[0];
++                                String newName = parts[1];
++                                gui.updateUserName(oldName, newName);
++                            }
++                        }
++
++                        if (message.key.equals("READ")) {
++                            String[] historyMessages = respText.split("\n");
++                            for (String msg : historyMessages) {
++                                if (!msg.trim().isEmpty()) {
++                                    gui.appendHistoryMessage(msg);
++                                }
++                            }
++                        } else {
++                            gui.appendMessage(respText);
++                        }
+                     }
+ 
+                     System.out.print("> ");
+@@ -163,7 +157,11 @@
+         listener.setDaemon(true);
+         listener.start();
+ 
+-        send("JOIN", "");
++        if (username == null)
++            send("JOIN", "");
++        else
++            send("JOIN", username);
++
+         while (true) {
+             try {
+                 System.out.print("\n> ");
+@@ -194,23 +192,23 @@
+                         send("NAME", parts[1]);
+                         break;
+ 
+-                    case "send":
++                    case "msg":
+                         if (parts.length < 2) {
+-                            System.out.println("Usage: send <text>");
++                            System.out.println("Usage: msg <text>");
+                             continue;
+                         }
+-                        send("SEND", parts[1]);
++                        send("MSG", parts[1]);
+                         break;
+ 
+                     case "time":
+                         send("TIME", "");
+                         break;
+-                    case "hist":
+-                        send("HIST", "");
++                    case "read":
++                        send("READ", "");
+                         break;
+                     default:
+                         System.out.println("Unknown command: " + command);
+-                        System.out.println("Available: name, send, time, hist, quit");
++                        System.out.println("Available: name, msg, time, read, quit");
+                 }
+ 
+             } catch (Exception e) {
+@@ -231,10 +229,6 @@
+         }
+     }
+ 
+-    /**
+-     * Convert byte array to hex string with spaces between bytes.
+-     * Example: [0x48, 0x45, 0x4C, 0x4F] -> "48 45 4c 4f"
+-     */
+     public static String bytesToHex(byte[] bytes) {
+         StringBuilder sb = new StringBuilder();
+         for (int i = 0; i < bytes.length; i++) {
+@@ -246,9 +240,6 @@
+         return sb.toString();
+     }
+ 
+-    /**
+-     * Simple KLV message structure
+-     */
+     static class KLVMessage {
+         String key;
+         byte[] value;
+@@ -259,9 +250,6 @@
+         }
+     }
+ 
+-    /**
+-     * Represents a parsed response
+-     */
+     static class KLVResponse {
+         String key;
+         String text;
+@@ -275,9 +263,7 @@
+     public static void main(String[] args) {
+         String host = "localhost";
+         int port = 9001;
+-        String mode = "interactive";
+ 
+-        // Parse arguments
+         if (args.length > 0) {
+             host = args[0];
+         }
+@@ -290,20 +276,21 @@
+             }
+         }
+         if (args.length > 2) {
+-            mode = args[2];
++            username = args[2];
+         }
+ 
+         JavaExampleClient client = new JavaExampleClient(host, port);
+ 
+         ClientGui gui = new ClientGui(host, port);
+         client.setGui(gui);
++        gui.setClient(client);
+ 
+         if (!client.connect()) {
+             System.exit(1);
+         }
+ 
+         try {
+-            client.interactiveMode();
++            client.chatRoom();
+         } finally {
+             client.close();
+         }
+Index: ClientGui.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import java.awt.*;\nimport javax.swing.*;\n\n\npublic class ClientGui extends JFrame {\n    boolean dark = false;\n\n    private JPanel chatArea;\n    private JScrollPane scrollPane;\n\n    private JTextField input;\n\n    private JLabel pfp;\n    private ImageIcon[] pfps = new ImageIcon[6];\n    private int currentPfpIndex = 0;\n\n\n    public ClientGui(String host, int port) {\n\n        super(\"ClientGui\");\n\n        pfps[0] = loadAndScaleIcon(\"cats/cat1.png\", 24);\n        pfps[1] = loadAndScaleIcon(\"cats/cat2.png\", 24);\n        pfps[2] = loadAndScaleIcon(\"cats/cat3.png\", 24);\n        pfps[3] = loadAndScaleIcon(\"cats/cat4.png\", 24);\n        pfps[4] = loadAndScaleIcon(\"cats/cat5.png\", 24);\n        pfps[5] = loadAndScaleIcon(\"cats/cat6.png\", 24);\n\n        Color pastelPink = new Color(255, 182, 193);\n\n        JPanel main = new JPanel(new BorderLayout());\n        main.setBackground(new Color(245, 246, 250)); //grey\n        main.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 3, true));\n        setContentPane(main);\n\n        //Header\n        JPanel header = new JPanel(new BorderLayout());\n        header.setPreferredSize(new Dimension(370, 50));\n        header.setBackground(new Color(52, 73, 94)); //dark grey\n\n        JLabel title = new JLabel(\"Chatroom\");\n        title.setForeground(Color.WHITE);\n        title.setFont(new Font(\"SansSerif\", Font.BOLD, 18));\n\n        pfp = new JLabel(pfps[0]);\n\n        JPanel leftHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));\n        leftHeader.setOpaque(false);\n       // leftHeader.add(pfp);\n        leftHeader.add(title);\n\n        header.add(leftHeader, BorderLayout.WEST);\n\n        //Cats\n        JButton pfpButton = new JButton(\"Pfps\");\n        pfpButton.setForeground(Color.WHITE);\n        pfpButton.setBackground(header.getBackground());\n        pfpButton.setHorizontalAlignment(SwingConstants.RIGHT);\n        //pfpButton.setBorder(BorderFactory.createLineBorder(darkGrey, 2, true));\n        pfpButton.setContentAreaFilled(true);\n        pfpButton.setOpaque(true);\n        pfpButton.setBorderPainted(false);\n        pfpButton.setFocusPainted(false);\n\n        header.add(pfpButton, BorderLayout.EAST);\n\n        main.add(header, BorderLayout.NORTH);\n\n        //chat area\n        chatArea = new JPanel();\n        chatArea.setLayout(new BoxLayout(chatArea, BoxLayout.Y_AXIS));\n        chatArea.setBackground(Color.WHITE);\n        chatArea.setBorder(BorderFactory.createEmptyBorder(4,10,10,10));\n\n        scrollPane = new JScrollPane(chatArea);\n        scrollPane.setBorder(BorderFactory.createEmptyBorder());\n        scrollPane.getVerticalScrollBar().setUnitIncrement(16);\n\n        main.add(scrollPane, BorderLayout.CENTER);\n\n        //Bottom and buttons\n        JPanel bottom = new JPanel();\n        bottom.setLayout(new BoxLayout(bottom, BoxLayout.Y_AXIS));\n        bottom.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));\n        bottom.setBackground(main.getBackground());\n\n        input = new JTextField();\n        bottom.add(input);\n        bottom.add(Box.createVerticalStrut(16));\n\n        JPanel buttons = new JPanel(new GridLayout(1, 3, 8, 0));\n        JButton sendButton = new JButton(\"Send\");\n        JButton exitButton = new JButton(\"Exit\");\n        JButton darkModeButton = new JButton(\"Dark Mode\");\n\n        sendButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));\n        exitButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));\n        darkModeButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));\n\n        buttons.add(sendButton);\n        buttons.add(exitButton);\n        buttons.add(darkModeButton);\n        bottom.add(buttons);\n        main.add(bottom, BorderLayout.SOUTH);\n\n        //dark mode button\n        darkModeButton.addActionListener(e -> {\n            if (dark == false) {\n                main.setBackground(Color.DARK_GRAY);\n                header.setBackground(Color.DARK_GRAY);\n                chatArea.setBackground(Color.GRAY);\n                chatArea.setForeground(Color.WHITE);\n                //chatWrapper.setBackground(Color.GRAY);\n                input.setBackground(Color.GRAY);\n                input.setForeground(Color.WHITE);\n\n                sendButton.setForeground(Color.WHITE);\n                exitButton.setForeground(Color.WHITE);\n                darkModeButton.setForeground(Color.WHITE);\n\n                pfpButton.setBackground(header.getBackground());\n                pfpButton.setForeground(Color.WHITE);\n               // pfpButton.setOpaque(false);\n\n                bottom.setBackground(Color.DARK_GRAY);\n                buttons.setBackground(Color.DARK_GRAY);\n                scrollPane.setBackground(Color.GRAY);\n                scrollPane.getViewport().setBackground(Color.GRAY);\n                input.setBorder(BorderFactory.createLineBorder(Color.BLACK, 1));\n\n                darkModeButton.setText(\"Light Mode\");\n                dark = true;\n            }\n            else {\n                main.setBackground(new Color(245,246,250));\n                header.setBackground(new Color(52,73,94));\n                chatArea.setBackground(Color.WHITE);\n                chatArea.setForeground(Color.BLACK);\n                //chatWrapper.setBackground(Color.WHITE);\n                input.setBackground(Color.WHITE);\n                input.setForeground(Color.BLACK);\n\n                sendButton.setForeground(Color.BLACK);\n                exitButton.setForeground(Color.BLACK);\n                darkModeButton.setForeground(Color.BLACK);\n\n                pfpButton.setBackground(header.getBackground());\n                pfpButton.setForeground(Color.WHITE);\n                //pfpButton.setOpaque(true);\n\n                bottom.setBackground(new Color(245,246,250));\n                buttons.setBackground(new Color(245,246,250));\n                scrollPane.setBackground(Color.WHITE);\n                scrollPane.getViewport().setBackground(Color.WHITE);\n\n                input.setBorder(UIManager.getBorder(\"TextField.border\"));\n\n                darkModeButton.setText(\"Dark Mode\");\n                dark = false;\n            }\n        });\n\n        sendButton.addActionListener(e -> {\n            String text = input.getText().trim();\n            if(!text.isEmpty()) {\n                appendMessage(text);\n                input.setText(\"\");\n            }\n        });\n\n        input.addActionListener(e -> {\n            String text = input.getText().trim();\n            if (!text.isEmpty()) {\n                appendMessage(text);\n                input.setText(\"\");\n            }\n        });\n\n        exitButton.addActionListener(e -> {\n            dispose();\n            System.exit(0);\n        });\n\n        pfpButton.addActionListener(e -> {\n           Object [] options = new Object[pfps.length];\n           for(int i = 0; i < pfps.length; i++) {\n               options[i] = pfps [i];\n           }\n\n           int choice = JOptionPane.showOptionDialog(\n                   this,\n                   \"Choose a uglee cat pfp\",\n                   \"pfps\",\n                   JOptionPane.DEFAULT_OPTION,\n                   JOptionPane.PLAIN_MESSAGE,\n                   null,\n                   options,\n                   options[currentPfpIndex]\n           );\n\n           if (choice >= 0 && choice < pfps.length) {\n               currentPfpIndex = choice;\n               pfp.setIcon(pfps[currentPfpIndex]);\n           }\n\n        });\n\n        setSize(370, 670);\n        setResizable(true);\n        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);\n        setLocationRelativeTo(null);\n        setVisible(true);\n    }\n\n    public void appendMessage(String message) {\n        SwingUtilities.invokeLater(() -> {\n            JPanel row = new JPanel();\n            row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));\n            row.setOpaque(false);\n\n            JLabel iconLabel = new JLabel(pfps[currentPfpIndex]);\n            JLabel textLabel = new JLabel(message);\n\n            row.add(iconLabel);\n            row.add(Box.createHorizontalStrut(8));\n            row.add(textLabel);\n            row.setAlignmentX(Component.LEFT_ALIGNMENT);\n\n            chatArea.add(row);\n            chatArea.add(Box.createVerticalStrut(0));\n\n            chatArea.revalidate();\n            chatArea.repaint();\n\n            JScrollBar bar = scrollPane.getVerticalScrollBar();\n            bar.setValue(bar.getMaximum());\n            //chatArea.append(message + \"\\n\");\n            //chatArea.setCaretPosition(chatArea.getDocument().getLength());\n        });\n    }\n\n\n\n    public void closeWindow() {\n        SwingUtilities.invokeLater(() -> {\n            dispose();\n        });\n    }\n\n    private ImageIcon loadAndScaleIcon(String path, int size) {\n        ImageIcon icon = new ImageIcon(path);\n        Image img = icon.getImage().getScaledInstance(size, size, Image.SCALE_SMOOTH);\n        return new ImageIcon(img);\n    }\n\n    public static void main(String[] args) {\n        //SwingUtilities.invokeLater(() -> new ClientGui(\"localhost\", 8080));\n\n\n    }\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/ClientGui.java b/ClientGui.java
+--- a/ClientGui.java	(revision eeaee4cc4f49619a453a57f4c43ba746f3199dc4)
++++ b/ClientGui.java	(date 1765397183715)
+@@ -1,22 +1,18 @@
+ import java.awt.*;
+ import javax.swing.*;
++import java.awt.geom.Ellipse2D;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ 
+ public class ClientGui extends JFrame {
+     boolean dark = false;
+-
+-    private JPanel chatArea;
+-    private JScrollPane scrollPane;
+-
+-    private JTextField input;
+-
+-    private JLabel pfp;
++    private JPanel messagePanel;
+     private ImageIcon[] pfps = new ImageIcon[6];
+-    private int currentPfpIndex = 0;
+-
++    private Map<String, Integer> userPfpMap = new HashMap<>();
++    private JavaExampleClient client;
+ 
+     public ClientGui(String host, int port) {
+-
+         super("ClientGui");
+ 
+         pfps[0] = loadAndScaleIcon("cats/cat1.png", 24);
+@@ -26,183 +22,193 @@
+         pfps[4] = loadAndScaleIcon("cats/cat5.png", 24);
+         pfps[5] = loadAndScaleIcon("cats/cat6.png", 24);
+ 
+-        Color pastelPink = new Color(255, 182, 193);
+-
+         JPanel main = new JPanel(new BorderLayout());
+-        main.setBackground(new Color(245, 246, 250)); //grey
++        main.setBackground(new Color(245, 246, 250));
+         main.setBorder(BorderFactory.createLineBorder(Color.DARK_GRAY, 3, true));
+         setContentPane(main);
+ 
+-        //Header
+         JPanel header = new JPanel(new BorderLayout());
+         header.setPreferredSize(new Dimension(370, 50));
+-        header.setBackground(new Color(52, 73, 94)); //dark grey
++        header.setBackground(new Color(52, 73, 94));
+ 
+         JLabel title = new JLabel("Chatroom");
+         title.setForeground(Color.WHITE);
+         title.setFont(new Font("SansSerif", Font.BOLD, 18));
+ 
+-        pfp = new JLabel(pfps[0]);
+-
+         JPanel leftHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+         leftHeader.setOpaque(false);
+-       // leftHeader.add(pfp);
+         leftHeader.add(title);
+ 
+-        header.add(leftHeader, BorderLayout.WEST);
+-
+-        //Cats
+         JButton pfpButton = new JButton("Pfps");
+         pfpButton.setForeground(Color.WHITE);
+         pfpButton.setBackground(header.getBackground());
+         pfpButton.setHorizontalAlignment(SwingConstants.RIGHT);
+-        //pfpButton.setBorder(BorderFactory.createLineBorder(darkGrey, 2, true));
+         pfpButton.setContentAreaFilled(true);
+         pfpButton.setOpaque(true);
+         pfpButton.setBorderPainted(false);
+         pfpButton.setFocusPainted(false);
+ 
++        pfpButton.addActionListener(e -> {
++            Object[] options = new Object[pfps.length];
++            for (int i = 0; i < pfps.length; i++) {
++                options[i] = pfps[i];
++            }
++
++            JOptionPane.showOptionDialog(
++                    this,
++                    "Choose a uglee cat pfp",
++                    "pfps",
++                    JOptionPane.DEFAULT_OPTION,
++                    JOptionPane.PLAIN_MESSAGE,
++                    null,
++                    options,
++                    options[0]
++            );
++        });
++
++        header.add(leftHeader, BorderLayout.WEST);
+         header.add(pfpButton, BorderLayout.EAST);
+ 
+         main.add(header, BorderLayout.NORTH);
+ 
+-        //chat area
+-        chatArea = new JPanel();
+-        chatArea.setLayout(new BoxLayout(chatArea, BoxLayout.Y_AXIS));
+-        chatArea.setBackground(Color.WHITE);
+-        chatArea.setBorder(BorderFactory.createEmptyBorder(4,10,10,10));
++        messagePanel = new JPanel();
++        messagePanel.setLayout(new BoxLayout(messagePanel, BoxLayout.Y_AXIS));
++        messagePanel.setBackground(new Color(245, 246, 250));
+ 
+-        scrollPane = new JScrollPane(chatArea);
+-        scrollPane.setBorder(BorderFactory.createEmptyBorder());
+-        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
++        JScrollPane scroll = new JScrollPane(messagePanel);
++        scroll.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
++        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+ 
+-        main.add(scrollPane, BorderLayout.CENTER);
++        main.add(scroll, BorderLayout.CENTER);
+ 
+-        //Bottom and buttons
+         JPanel bottom = new JPanel();
+         bottom.setLayout(new BoxLayout(bottom, BoxLayout.Y_AXIS));
+         bottom.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+         bottom.setBackground(main.getBackground());
+ 
+-        input = new JTextField();
++        JTextField input = new JTextField();
+         bottom.add(input);
+         bottom.add(Box.createVerticalStrut(16));
+ 
+-        JPanel buttons = new JPanel(new GridLayout(1, 3, 8, 0));
++        Color pastelPink = new Color(255, 182, 193);
++
++        JPanel buttons = new JPanel(new GridLayout(1, 5, 8, 0));
+         JButton sendButton = new JButton("Send");
++        JButton readButton = new JButton("Read");
++        JButton nameButton = new JButton("Name");
+         JButton exitButton = new JButton("Exit");
+         JButton darkModeButton = new JButton("Dark Mode");
+ 
+         sendButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));
++        readButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));
++        nameButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));
+         exitButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));
+         darkModeButton.setBorder(BorderFactory.createLineBorder(pastelPink, 2, true));
+ 
+         buttons.add(sendButton);
++        buttons.add(readButton);
++        buttons.add(nameButton);
+         buttons.add(exitButton);
+         buttons.add(darkModeButton);
+         bottom.add(buttons);
+         main.add(bottom, BorderLayout.SOUTH);
+ 
+-        //dark mode button
++        sendButton.addActionListener(e -> {
++            String text = input.getText().trim();
++            if (!text.isEmpty() && client != null) {
++                client.send("MSG", text);
++                input.setText("");
++            }
++        });
++
++        input.addActionListener(e -> {
++            String text = input.getText().trim();
++            if (!text.isEmpty() && client != null) {
++                client.send("MSG", text);
++                input.setText("");
++            }
++        });
++
++        readButton.addActionListener(e -> {
++            if (client != null) {
++                client.send("READ", "");
++            }
++        });
++
++        nameButton.addActionListener(e -> {
++            if (client != null) {
++                String newName = JOptionPane.showInputDialog(this, "Enter new name:", "Change Name", JOptionPane.PLAIN_MESSAGE);
++                if (newName != null && !newName.trim().isEmpty()) {
++                    client.send("NAME", newName.trim());
++                }
++            }
++        });
++
++        exitButton.addActionListener(e -> {
++            if (client != null) {
++                client.send("QUIT", "");
++            }
++            dispose();
++        });
++
+         darkModeButton.addActionListener(e -> {
+             if (dark == false) {
+                 main.setBackground(Color.DARK_GRAY);
+                 header.setBackground(Color.DARK_GRAY);
+-                chatArea.setBackground(Color.GRAY);
+-                chatArea.setForeground(Color.WHITE);
+-                //chatWrapper.setBackground(Color.GRAY);
++                messagePanel.setBackground(Color.GRAY);
+                 input.setBackground(Color.GRAY);
+                 input.setForeground(Color.WHITE);
+ 
+-                sendButton.setForeground(Color.WHITE);
+-                exitButton.setForeground(Color.WHITE);
+-                darkModeButton.setForeground(Color.WHITE);
++                sendButton.setForeground(Color.BLACK);
++                readButton.setForeground(Color.BLACK);
++                nameButton.setForeground(Color.BLACK);
++                exitButton.setForeground(Color.BLACK);
++                darkModeButton.setForeground(Color.BLACK);
+ 
+                 pfpButton.setBackground(header.getBackground());
+                 pfpButton.setForeground(Color.WHITE);
+-               // pfpButton.setOpaque(false);
+ 
+                 bottom.setBackground(Color.DARK_GRAY);
+                 buttons.setBackground(Color.DARK_GRAY);
+-                scrollPane.setBackground(Color.GRAY);
+-                scrollPane.getViewport().setBackground(Color.GRAY);
++                scroll.setBackground(Color.GRAY);
++                scroll.getViewport().setBackground(Color.GRAY);
+                 input.setBorder(BorderFactory.createLineBorder(Color.BLACK, 1));
+ 
+                 darkModeButton.setText("Light Mode");
+                 dark = true;
++
++                updateMessageContainersBackground();
++                updateUsernameLabelsColor(Color.WHITE);
+             }
+             else {
+                 main.setBackground(new Color(245,246,250));
+                 header.setBackground(new Color(52,73,94));
+-                chatArea.setBackground(Color.WHITE);
+-                chatArea.setForeground(Color.BLACK);
+-                //chatWrapper.setBackground(Color.WHITE);
++                messagePanel.setBackground(new Color(245,246,250));
+                 input.setBackground(Color.WHITE);
+                 input.setForeground(Color.BLACK);
+ 
+                 sendButton.setForeground(Color.BLACK);
++                readButton.setForeground(Color.BLACK);
++                nameButton.setForeground(Color.BLACK);
+                 exitButton.setForeground(Color.BLACK);
+                 darkModeButton.setForeground(Color.BLACK);
+ 
+                 pfpButton.setBackground(header.getBackground());
+                 pfpButton.setForeground(Color.WHITE);
+-                //pfpButton.setOpaque(true);
+ 
+                 bottom.setBackground(new Color(245,246,250));
+                 buttons.setBackground(new Color(245,246,250));
+-                scrollPane.setBackground(Color.WHITE);
+-                scrollPane.getViewport().setBackground(Color.WHITE);
++                scroll.setBackground(Color.WHITE);
++                scroll.getViewport().setBackground(Color.WHITE);
+ 
+                 input.setBorder(UIManager.getBorder("TextField.border"));
+ 
+                 darkModeButton.setText("Dark Mode");
+                 dark = false;
+-            }
+-        });
+-
+-        sendButton.addActionListener(e -> {
+-            String text = input.getText().trim();
+-            if(!text.isEmpty()) {
+-                appendMessage(text);
+-                input.setText("");
+-            }
+-        });
+-
+-        input.addActionListener(e -> {
+-            String text = input.getText().trim();
+-            if (!text.isEmpty()) {
+-                appendMessage(text);
+-                input.setText("");
+-            }
+-        });
+-
+-        exitButton.addActionListener(e -> {
+-            dispose();
+-            System.exit(0);
+-        });
+ 
+-        pfpButton.addActionListener(e -> {
+-           Object [] options = new Object[pfps.length];
+-           for(int i = 0; i < pfps.length; i++) {
+-               options[i] = pfps [i];
+-           }
+-
+-           int choice = JOptionPane.showOptionDialog(
+-                   this,
+-                   "Choose a uglee cat pfp",
+-                   "pfps",
+-                   JOptionPane.DEFAULT_OPTION,
+-                   JOptionPane.PLAIN_MESSAGE,
+-                   null,
+-                   options,
+-                   options[currentPfpIndex]
+-           );
+-
+-           if (choice >= 0 && choice < pfps.length) {
+-               currentPfpIndex = choice;
+-               pfp.setIcon(pfps[currentPfpIndex]);
+-           }
+-
++                updateMessageContainersBackground();
++                updateUsernameLabelsColor(Color.GRAY);
++            }
+         });
+ 
+         setSize(370, 670);
+@@ -212,34 +218,213 @@
+         setVisible(true);
+     }
+ 
++
++    public void addLabel(String text) {
++        SwingUtilities.invokeLater(() -> {
++            String username = null;
++            String messageText = text;
++            boolean isJoinMessage = text.endsWith(" joined");
++            boolean isNameChangeMessage = text.contains(" has changed their name to ");
++            boolean isLeaveMessage = text.endsWith(" has left :(");
++
++            if (text.contains(":\t")) {
++                int separatorIndex = text.indexOf(":\t");
++                username = text.substring(0, separatorIndex);
++                messageText = text.substring(separatorIndex + 2);
++            }
++
++            messagePanel.add(Box.createVerticalStrut(10));
++
++            JPanel messageContainer = new JPanel();
++            messageContainer.setLayout(new BoxLayout(messageContainer, BoxLayout.X_AXIS));
++            messageContainer.setBackground(messagePanel.getBackground());
++            messageContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
++
++            if (!isJoinMessage && !isNameChangeMessage && !isLeaveMessage) {
++                RoundImageLabel profilePic = new RoundImageLabel(30);
++                profilePic.setPreferredSize(new Dimension(30, 30));
++                profilePic.setMaximumSize(new Dimension(30, 30));
++                profilePic.setMinimumSize(new Dimension(30, 30));
++                int pfpIndex = getPfpIndexForUser(username);
++                if (pfps[pfpIndex] != null) {
++                    profilePic.setImage(pfps[pfpIndex].getImage());
++                }
++                messageContainer.add(profilePic);
++                messageContainer.add(Box.createHorizontalStrut(8));
++            }
++
++            JPanel textContainer = new JPanel();
++            textContainer.setLayout(new BoxLayout(textContainer, BoxLayout.Y_AXIS));
++            textContainer.setBackground(messagePanel.getBackground());
++            textContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
++
++            JLabel usernameLabel = new JLabel(username != null ? username : "");
++            usernameLabel.setFont(new Font(usernameLabel.getFont().getName(), Font.PLAIN, 10));
++            usernameLabel.setForeground(dark ? Color.WHITE : Color.BLACK);
++            usernameLabel.setBackground(messagePanel.getBackground());
++            usernameLabel.setOpaque(false);
++            usernameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
++            textContainer.add(usernameLabel);
++
++            RoundedLabel label = new RoundedLabel(messageText, 20);
++            label.setBackground(new Color(230, 230, 230));
++            label.setAlignmentX(Component.LEFT_ALIGNMENT);
++            textContainer.add(label);
++
++            messageContainer.add(textContainer);
++            messagePanel.add(messageContainer);
++
++            messagePanel.revalidate();
++            Dimension prefSize = messageContainer.getPreferredSize();
++            messageContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, prefSize.height));
++            Dimension textPrefSize = textContainer.getPreferredSize();
++            textContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, textPrefSize.height));
++
++            messagePanel.revalidate();
++            messagePanel.repaint();
++
++            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, messagePanel);
++            if (scrollPane != null) {
++                JScrollBar vertical = scrollPane.getVerticalScrollBar();
++                vertical.setValue(vertical.getMaximum());
++            }
++        });
++    }
++
++    private void updateMessageContainersBackground() {
++        for (Component comp : messagePanel.getComponents()) {
++            if (comp instanceof JPanel) {
++                JPanel panel = (JPanel) comp;
++                panel.setBackground(messagePanel.getBackground());
++                updateContainerBackgrounds(panel);
++            }
++        }
++        messagePanel.revalidate();
++        messagePanel.repaint();
++    }
++
++    private void updateContainerBackgrounds(JPanel container) {
++        for (Component comp : container.getComponents()) {
++            if (comp instanceof JPanel) {
++                JPanel panel = (JPanel) comp;
++                panel.setBackground(messagePanel.getBackground());
++                updateContainerBackgrounds(panel);
++            }
++        }
++    }
++
++    private void updateUsernameLabelsColor(Color color) {
++        for (Component comp : messagePanel.getComponents()) {
++            if (comp instanceof JPanel) {
++                updateUsernameLabelsInContainer((JPanel) comp, color);
++            }
++        }
++        messagePanel.repaint();
++    }
++
++    private void updateUsernameLabelsInContainer(JPanel container, Color color) {
++        for (Component comp : container.getComponents()) {
++            if (comp instanceof JLabel && !(comp instanceof RoundedLabel)) {
++                ((JLabel) comp).setForeground(color);
++            } else if (comp instanceof JPanel) {
++                updateUsernameLabelsInContainer((JPanel) comp, color);
++            }
++        }
++    }
++
++    private int getPfpIndexForUser(String username) {
++        if (username == null || username.isEmpty()) {
++            return 0;
++        }
++        if (!userPfpMap.containsKey(username)) {
++            int hash = username.hashCode();
++            int assignedIndex = Math.abs(hash) % pfps.length;
++            userPfpMap.put(username, assignedIndex);
++        }
++        return userPfpMap.get(username);
++    }
++
++    public void updateUserName(String oldName, String newName) {
++        if (oldName != null && !oldName.isEmpty() && userPfpMap.containsKey(oldName)) {
++            int pfpIndex = userPfpMap.remove(oldName);
++            userPfpMap.put(newName, pfpIndex);
++        }
++    }
++
+     public void appendMessage(String message) {
++        addLabel(message);
++    }
++
++    public void appendHistoryMessage(String text) {
+         SwingUtilities.invokeLater(() -> {
+-            JPanel row = new JPanel();
+-            row.setLayout(new BoxLayout(row, BoxLayout.X_AXIS));
+-            row.setOpaque(false);
++            String username = null;
++            String messageText = text;
++
++            if (text.contains(":\t")) {
++                int separatorIndex = text.indexOf(":\t");
++                username = text.substring(0, separatorIndex);
++                messageText = text.substring(separatorIndex + 2);
++            }
++
++            messagePanel.add(Box.createVerticalStrut(10));
++
++            JPanel messageContainer = new JPanel();
++            messageContainer.setLayout(new BoxLayout(messageContainer, BoxLayout.X_AXIS));
++            messageContainer.setBackground(messagePanel.getBackground());
++            messageContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+ 
+-            JLabel iconLabel = new JLabel(pfps[currentPfpIndex]);
+-            JLabel textLabel = new JLabel(message);
++            RoundImageLabel profilePic = new RoundImageLabel(30);
++            profilePic.setPreferredSize(new Dimension(30, 30));
++            profilePic.setMaximumSize(new Dimension(30, 30));
++            profilePic.setMinimumSize(new Dimension(30, 30));
++            int pfpIndex = getPfpIndexForUser(username);
++            if (pfps[pfpIndex] != null) {
++                profilePic.setImage(pfps[pfpIndex].getImage());
++            }
++            messageContainer.add(profilePic);
++            messageContainer.add(Box.createHorizontalStrut(8));
+ 
+-            row.add(iconLabel);
+-            row.add(Box.createHorizontalStrut(8));
+-            row.add(textLabel);
+-            row.setAlignmentX(Component.LEFT_ALIGNMENT);
++            JPanel textContainer = new JPanel();
++            textContainer.setLayout(new BoxLayout(textContainer, BoxLayout.Y_AXIS));
++            textContainer.setBackground(messagePanel.getBackground());
++            textContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
+ 
+-            chatArea.add(row);
+-            chatArea.add(Box.createVerticalStrut(0));
++            JLabel usernameLabel = new JLabel(username != null ? username : "");
++            usernameLabel.setFont(new Font(usernameLabel.getFont().getName(), Font.PLAIN, 10));
++            usernameLabel.setForeground(dark ? Color.WHITE : Color.BLACK);
++            usernameLabel.setBackground(messagePanel.getBackground());
++            usernameLabel.setOpaque(false);
++            usernameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
++            textContainer.add(usernameLabel);
+ 
+-            chatArea.revalidate();
+-            chatArea.repaint();
++            RoundedLabel label = new RoundedLabel(messageText, 20);
++            label.setBackground(new Color(200, 220, 240));
++            label.setAlignmentX(Component.LEFT_ALIGNMENT);
++            textContainer.add(label);
+ 
+-            JScrollBar bar = scrollPane.getVerticalScrollBar();
+-            bar.setValue(bar.getMaximum());
+-            //chatArea.append(message + "\n");
+-            //chatArea.setCaretPosition(chatArea.getDocument().getLength());
++            messageContainer.add(textContainer);
++            messagePanel.add(messageContainer);
++
++            messagePanel.revalidate();
++            Dimension prefSize = messageContainer.getPreferredSize();
++            messageContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, prefSize.height));
++            Dimension textPrefSize = textContainer.getPreferredSize();
++            textContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, textPrefSize.height));
++
++            messagePanel.revalidate();
++            messagePanel.repaint();
++
++            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, messagePanel);
++            if (scrollPane != null) {
++                JScrollBar vertical = scrollPane.getVerticalScrollBar();
++                vertical.setValue(vertical.getMaximum());
++            }
+         });
+     }
+ 
+-
++    public void setClient(JavaExampleClient client) {
++        this.client = client;
++    }
+ 
+     public void closeWindow() {
+         SwingUtilities.invokeLater(() -> {
+@@ -254,8 +439,55 @@
+     }
+ 
+     public static void main(String[] args) {
+-        //SwingUtilities.invokeLater(() -> new ClientGui("localhost", 8080));
++        SwingUtilities.invokeLater(() -> new ClientGui("localhost", 8080));
++
++
++    }
++}
++
++class RoundImageLabel extends JPanel {
++    private Image image;
++    private int size;
++
++    public RoundImageLabel(int size) {
++        this.size = size;
++        setPreferredSize(new Dimension(size, size));
++        setOpaque(false);
++    }
+ 
++    public void setImage(String imagePath) {
++        image = new ImageIcon(imagePath).getImage();
++        repaint();
++    }
+ 
++    public void setImage(Image img) {
++        image = img;
++        repaint();
+     }
+-}
++
++    @Override
++    protected void paintComponent(Graphics g) {
++        super.paintComponent(g);
++
++        if (image == null) {
++            Graphics2D g2 = (Graphics2D) g.create();
++            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
++                    RenderingHints.VALUE_ANTIALIAS_ON);
++            g2.setColor(new Color(200, 200, 200));
++            g2.fillOval(0, 0, size, size);
++            g2.dispose();
++            return;
++        }
++
++        Graphics2D g2 = (Graphics2D) g.create();
++        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
++                RenderingHints.VALUE_ANTIALIAS_ON);
++
++        Shape circle = new Ellipse2D.Double(0, 0, size, size);
++        g2.setClip(circle);
++
++        g2.drawImage(image, 0, 0, size, size, this);
++
++        g2.dispose();
++    }
++}
+\ No newline at end of file
