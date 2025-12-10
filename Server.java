@@ -18,7 +18,7 @@ public class Server {
     private volatile boolean running;
     private final AtomicInteger clientCount = new AtomicInteger(0);
     private static final List<OutputStream> outputStreamList = new ArrayList<>();
-    
+
     private static final Queue<String> messageHistory = new ArrayDeque<>();
     private static final int MAX_HISTORY_SIZE = 20;
     private static final Object historyLock = new Object();
@@ -40,6 +40,7 @@ public class Server {
         System.out.println("Listening on " + host + ":" + port);
         System.out.println("\nThis is an EXAMPLE server, NOT the chat protocol!");
         System.out.println("\nSupported commands:");
+        System.out.println("  JOIN:length:name   - join with usernamee");
         System.out.println("  NAME:length:name   - send back new username  ");
         System.out.println("  MSG:length:text    - Send back text");
         System.out.println("  READ:length:text   - send back messages");
@@ -90,21 +91,23 @@ public class Server {
             }
         }
     }
-    
+
     private static List<String> getHistory() {
         synchronized (historyLock) {
             return new ArrayList<>(messageHistory);
         }
     }
-    
+
     private class ClientHandler implements Runnable {
         private final Socket socket;
         private final int clientId;
-        private String username = "user" + numOfClients;
+        private String username;
+        //private String username = "user" + numOfClients;
 
         public ClientHandler(Socket socket, int clientId) {
             this.socket = socket;
             this.clientId = clientId;
+            this.username = "user" + clientId;
         }
 
         @Override
@@ -124,9 +127,9 @@ public class Server {
                     }
 
                     String valueStr = new String(message.value, StandardCharsets.UTF_8);
-                    
+
                     System.out.println("[Client " + clientId + "] Received: " +
-                        message.key + ":" + message.value.length + ":" + valueStr);
+                            message.key + ":" + message.value.length + ":" + valueStr);
 
                     ResponseResult result = processCommand(message.key, message.value);
                     if (result == null || result.response == null) {
@@ -156,6 +159,9 @@ public class Server {
                         } else {
                             broadCastResponse(result.response);
                         }
+                    } else if (result.statusCode != 200 && result.response != null) {
+                        output.write(result.response);
+                        output.flush();
                     }
 
                     if (message.key.equals("QUIT")) {
@@ -189,7 +195,7 @@ public class Server {
                     String joinMsg = username + " joined";
                     byte[] joinResponse = KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
                     return new ResponseResult(joinResponse, 200);
-                    
+
                 case "NAME":
                     name = new String(value, StandardCharsets.UTF_8);
                     String greeting = username + " has changed their name to " + name;
@@ -209,10 +215,10 @@ public class Server {
 
                 case "TIME":
                     String timestamp = LocalDateTime.now().format(
-                        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                     byte[] timeResponse = KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
                     return new ResponseResult(timeResponse, 200);
-                    
+
                 case "READ":
                     List<String> history = getHistory();
                     String historyText;
@@ -223,7 +229,7 @@ public class Server {
                     }
                     byte[] readResponse = KLVExample.encodeKLV("READ", historyText.getBytes(StandardCharsets.UTF_8));
                     return new ResponseResult(readResponse, 200);
-                    
+
                 case "QUIT":
                     String leaving = username + " has left :(";
                     byte[] quitResponse = KLVExample.encodeKLV("QUIT", leaving.getBytes(StandardCharsets.UTF_8));

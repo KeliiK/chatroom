@@ -128,12 +128,12 @@ public class Client {
                     // Handle RESP messages (status codes)
                     if (message.key.equals("RESP")) {
                         try {
-                            int statusCode = Integer.parseInt(respText);
-                            if (statusCode == 200) {
+                            String statusCode = respText;
+                            if (statusCode == "200\0") {
                                 System.out.println("[Status] Success (200)");
-                            } else if (statusCode == 400) {
+                            } else if (statusCode == "400\0") {
                                 System.err.println("[Status] Bad Request (400) - Message failed");
-                            } else if (statusCode == 403) {
+                            } else if (statusCode == "403\0") {
                                 System.err.println("[Status] Forbidden (403) - Operation not allowed");
                             } else {
                                 System.out.println("[Status] Code: " + statusCode);
@@ -217,7 +217,7 @@ public class Client {
                             System.out.println("Usage: msg <text>");
                             continue;
                         }
-                        send("MSG", parts[1]);
+                        send("MSG\0", parts[1]);
                         break;
 
                     case "time":
