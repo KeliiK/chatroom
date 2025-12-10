@@ -4,7 +4,7 @@ import javax.swing.*;
 
 public class ClientGui extends JFrame {
     boolean dark = false;
-    private JTextArea chatArea;
+    private JPanel messagePanel; // Panel to hold JLabels instead of JTextArea
 
     public ClientGui(String host, int port) {
         super("ClientGui");
@@ -31,12 +31,14 @@ public class ClientGui extends JFrame {
 
         main.add(header, BorderLayout.NORTH);
 
-        //chat area
-        chatArea = new JTextArea();
-        chatArea.setEditable(false);
+        // Message panel to hold JLabels
+        messagePanel = new JPanel();
+        messagePanel.setLayout(new BoxLayout(messagePanel, BoxLayout.Y_AXIS));
+        messagePanel.setBackground(new Color(245, 246, 250));
 
-        JScrollPane scroll = new JScrollPane(chatArea);
+        JScrollPane scroll = new JScrollPane(messagePanel);
         scroll.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 
         main.add(scroll, BorderLayout.CENTER);
 
@@ -70,8 +72,7 @@ public class ClientGui extends JFrame {
             if (dark == false) {
                 main.setBackground(Color.DARK_GRAY);
                 header.setBackground(Color.DARK_GRAY);
-                chatArea.setBackground(Color.GRAY);
-                chatArea.setForeground(Color.WHITE);
+                messagePanel.setBackground(Color.GRAY);
                 input.setBackground(Color.GRAY);
                 input.setForeground(Color.WHITE);
 
@@ -91,8 +92,7 @@ public class ClientGui extends JFrame {
             else {
                 main.setBackground(new Color(245,246,250));
                 header.setBackground(new Color(52,73,94));
-                chatArea.setBackground(Color.WHITE);
-                chatArea.setForeground(Color.BLACK);
+                messagePanel.setBackground(new Color(245,246,250));
                 input.setBackground(Color.WHITE);
                 input.setForeground(Color.BLACK);
 
@@ -119,13 +119,61 @@ public class ClientGui extends JFrame {
         setVisible(true);
     }
 
-    public void appendMessage(String message) {
+
+    /**
+     * Add a label to the message panel (similar to addLabel in ConsoleToLabels)
+     * Parses username from message format "username:\tmessage" and displays username above message
+     */
+    public void addLabel(String text) {
         SwingUtilities.invokeLater(() -> {
-            chatArea.append(message + "\n");
-            chatArea.setCaretPosition(chatArea.getDocument().getLength());
+            String username = null;
+            String messageText = text;
+            
+            // Parse username if message contains ":\t" separator
+            if (text.contains(":\t")) {
+                int separatorIndex = text.indexOf(":\t");
+                username = text.substring(0, separatorIndex);
+                messageText = text.substring(separatorIndex + 2); // Skip ":\t"
+            }
+            
+            messagePanel.add(Box.createVerticalStrut(10));
+            
+            // Add username label above message if username exists
+            if (username != null && !username.isEmpty()) {
+                JLabel usernameLabel = new JLabel(username);
+                usernameLabel.setFont(new Font(usernameLabel.getFont().getName(), Font.PLAIN, 10)); // Small text
+                usernameLabel.setForeground(new Color(100, 100, 100)); // Gray text
+                usernameLabel.setBackground(messagePanel.getBackground());
+                usernameLabel.setOpaque(false); // Transparent background to match panel
+                usernameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+                messagePanel.add(usernameLabel);
+            }
+            
+            // Add message label (without username)
+            RoundedLabel label = new RoundedLabel(messageText, 20);
+            label.setBackground(new Color(230, 230, 230));
+            label.setAlignmentX(Component.LEFT_ALIGNMENT);
+            messagePanel.add(label);
+            
+            messagePanel.revalidate(); // refresh layout
+            messagePanel.repaint();    // repaint window
+            
+            // Auto-scroll to bottom
+            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, messagePanel);
+            if (scrollPane != null) {
+                JScrollBar vertical = scrollPane.getVerticalScrollBar();
+                vertical.setValue(vertical.getMaximum());
+            }
         });
     }
-
+    
+    /**
+     * Append a message (calls addLabel for compatibility)
+     */
+    public void appendMessage(String message) {
+        addLabel(message);
+    }
+    
     public void closeWindow() {
         SwingUtilities.invokeLater(() -> {
             dispose();
