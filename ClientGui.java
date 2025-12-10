@@ -10,7 +10,7 @@ public class ClientGui extends JFrame {
     private JPanel messagePanel;
     private ImageIcon[] pfps = new ImageIcon[6];
     private Map<String, Integer> userPfpMap = new HashMap<>();
-    private JavaExampleClient client;
+    private Client client;
 
     public ClientGui(String host, int port) {
         super("ClientGui");
@@ -422,7 +422,7 @@ public class ClientGui extends JFrame {
         });
     }
 
-    public void setClient(JavaExampleClient client) {
+    public void setClient(Client client) {
         this.client = client;
     }
 
