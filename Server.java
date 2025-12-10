@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class JavaExampleServer {
+public class Server {
 
     private final String host;
     private final int port;
@@ -24,7 +24,7 @@ public class JavaExampleServer {
     private static final Object historyLock = new Object();
     private static int numOfClients = 0;
 
-    public JavaExampleServer(String host, int port) {
+    public Server(String host, int port) {
         this.host = host;
         this.port = port;
         this.running = false;
@@ -128,24 +128,34 @@ public class JavaExampleServer {
                     System.out.println("[Client " + clientId + "] Received: " +
                         message.key + ":" + message.value.length + ":" + valueStr);
 
-                    byte[] response = processCommand(message.key, message.value);
-                    if (response == null) {
+                    ResponseResult result = processCommand(message.key, message.value);
+                    if (result == null || result.response == null) {
                         break;
                     }
 
-                    System.out.println("[DEBUG] Raw bytes sent: " + JavaExampleServer.bytesToHex(response));
+                    // Send RESP message directly to the sender
+                    String statusCodeStr = String.valueOf(result.statusCode);
+                    byte[] respMessage = KLVExample.encodeKLV("RESP", statusCodeStr.getBytes(StandardCharsets.UTF_8));
+                    output.write(respMessage);
+                    output.flush();
+                    System.out.println("[Client " + clientId + "] Sent RESP: " + result.statusCode);
 
-                    if (message.key.equals("MSG")) {
-                        KLVExample.KLVMessage respMsg = KLVExample.decodeKLV(response);
-                        String responseValue = new String(respMsg.value, StandardCharsets.UTF_8);
-                        addToHistory(responseValue);
-                    }
+                    // Only process and broadcast if status is successful (200)
+                    if (result.statusCode == 200 && result.response != null) {
+                        System.out.println("[DEBUG] Raw bytes sent: " + Server.bytesToHex(result.response));
 
-                    if (message.key.equals("READ")) {
-                        output.write(response);
-                        output.flush();
-                    } else {
-                        broadCastResponse(response);
+                        if (message.key.equals("MSG")) {
+                            KLVExample.KLVMessage respMsg = KLVExample.decodeKLV(result.response);
+                            String responseValue = new String(respMsg.value, StandardCharsets.UTF_8);
+                            addToHistory(responseValue);
+                        }
+
+                        if (message.key.equals("READ")) {
+                            output.write(result.response);
+                            output.flush();
+                        } else {
+                            broadCastResponse(result.response);
+                        }
                     }
 
                     if (message.key.equals("QUIT")) {
@@ -169,7 +179,7 @@ public class JavaExampleServer {
             }
         }
 
-        private byte[] processCommand(String key, byte[] value) throws Exception {
+        private ResponseResult processCommand(String key, byte[] value) throws Exception {
             String name = null;
             switch (key) {
                 case "JOIN":
@@ -177,22 +187,31 @@ public class JavaExampleServer {
                     if (name.length() != 0)
                         username = name;
                     String joinMsg = username + " joined";
-                    return KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
+                    byte[] joinResponse = KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(joinResponse, 200);
+                    
                 case "NAME":
                     name = new String(value, StandardCharsets.UTF_8);
                     String greeting = username + " has changed their name to " + name;
                     username = name;
-                    return KLVExample.encodeKLV("NAME", greeting.getBytes(StandardCharsets.UTF_8));
+                    byte[] nameResponse = KLVExample.encodeKLV("NAME", greeting.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(nameResponse, 200);
 
                 case "MSG":
                     String valueStr = new String(value, StandardCharsets.UTF_8);
+                    // Validate message - empty messages are unsuccessful
+                    if (valueStr.trim().isEmpty()) {
+                        return new ResponseResult(null, 400);
+                    }
                     valueStr = username + ":\t" + valueStr;
-                    return KLVExample.encodeKLV("MSG", valueStr.getBytes(StandardCharsets.UTF_8));
+                    byte[] msgResponse = KLVExample.encodeKLV("MSG", valueStr.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(msgResponse, 200);
 
                 case "TIME":
                     String timestamp = LocalDateTime.now().format(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-                    return KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
+                    byte[] timeResponse = KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(timeResponse, 200);
                     
                 case "READ":
                     List<String> history = getHistory();
@@ -202,15 +221,18 @@ public class JavaExampleServer {
                     } else {
                         historyText = String.join("\n", history);
                     }
-                    return KLVExample.encodeKLV("READ", historyText.getBytes(StandardCharsets.UTF_8));
+                    byte[] readResponse = KLVExample.encodeKLV("READ", historyText.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(readResponse, 200);
                     
                 case "QUIT":
                     String leaving = username + " has left :(";
-                    return KLVExample.encodeKLV("QUIT", leaving.getBytes(StandardCharsets.UTF_8));
+                    byte[] quitResponse = KLVExample.encodeKLV("QUIT", leaving.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(quitResponse, 200);
 
                 default:
                     String error = "Unknown command: " + key;
-                    return KLVExample.encodeKLV("ERR", error.getBytes(StandardCharsets.UTF_8));
+                    byte[] errResponse = KLVExample.encodeKLV("ERR", error.getBytes(StandardCharsets.UTF_8));
+                    return new ResponseResult(errResponse, 400);
             }
         }
 
@@ -277,6 +299,16 @@ public class JavaExampleServer {
         }
     }
 
+    static class ResponseResult {
+        byte[] response;
+        int statusCode;
+
+        ResponseResult(byte[] response, int statusCode) {
+            this.response = response;
+            this.statusCode = statusCode;
+        }
+    }
+
 
     public static void broadCastResponse(byte[] response) {
         synchronized (outputStreamList) {
@@ -308,7 +340,7 @@ public class JavaExampleServer {
             }
         }
 
-        JavaExampleServer server = new JavaExampleServer("0.0.0.0", port);
+        Server server = new Server("0.0.0.0", port);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\n\nShutting down server...");

@@ -10,7 +10,7 @@ public class ClientGui extends JFrame {
     private JPanel messagePanel;
     private ImageIcon[] pfps = new ImageIcon[6];
     private Map<String, Integer> userPfpMap = new HashMap<>();
-    private JavaExampleClient client;
+    private Client client;
 
     public ClientGui(String host, int port) {
         super("ClientGui");
@@ -225,6 +225,7 @@ public class ClientGui extends JFrame {
             String messageText = text;
             boolean isJoinMessage = text.endsWith(" joined");
             boolean isNameChangeMessage = text.contains(" has changed their name to ");
+            boolean isLeaveMessage = text.endsWith(" has left :(");
 
             if (text.contains(":\t")) {
                 int separatorIndex = text.indexOf(":\t");
@@ -239,7 +240,7 @@ public class ClientGui extends JFrame {
             messageContainer.setBackground(messagePanel.getBackground());
             messageContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
             
-            if (!isJoinMessage && !isNameChangeMessage) {
+            if (!isJoinMessage && !isNameChangeMessage && !isLeaveMessage) {
                 RoundImageLabel profilePic = new RoundImageLabel(30);
                 profilePic.setPreferredSize(new Dimension(30, 30));
                 profilePic.setMaximumSize(new Dimension(30, 30));
@@ -421,7 +422,7 @@ public class ClientGui extends JFrame {
         });
     }
 
-    public void setClient(JavaExampleClient client) {
+    public void setClient(Client client) {
         this.client = client;
     }
 
