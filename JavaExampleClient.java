@@ -6,18 +6,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Scanner;
 
-/**
- * Java KLV Example Client - Educational Demo
- *
- * This client connects to JavaExampleServer and demonstrates:
- * - Connecting to a server
- * - Sending KLV messages
- * - Receiving and parsing responses
- * - Interactive user input
- *
- * This is NOT the chat protocol - it's a simpler example to learn from.
- * Study this code and apply the patterns to your chat client!
- */
 public class JavaExampleClient {
 
     private final String host;
@@ -26,15 +14,13 @@ public class JavaExampleClient {
     private InputStream input;
     private OutputStream output;
     private ClientGui gui;
+    private static String username;
 
     public JavaExampleClient(String host, int port) {
         this.host = host;
         this.port = port;
     }
     
-    /**
-     * Set the GUI reference for displaying messages
-     */
     public void setGui(ClientGui gui) {
         this.gui = gui;
     }
@@ -51,8 +37,8 @@ public class JavaExampleClient {
             System.out.println("\nThis is an EXAMPLE client, NOT the chat protocol!");
             System.out.println("\nAvailable commands:");
             System.out.println("  name <new name>  - Change username");
-            System.out.println("  send <text>   - Send text back");
-            System.out.println("  hist          - Get last 20 messages");
+            System.out.println("  msg <text>    - send message");
+            System.out.println("  read          - Get last 20 messages");
             System.out.println("  time          - Get server time");
             System.out.println("  quit          - Disconnect");
             System.out.println("=".repeat(70));
@@ -80,22 +66,18 @@ public class JavaExampleClient {
     }
 
     private KLVMessage readKLVFromSocket() throws IOException {
-        // Read 4 bytes for key
         byte[] keyBytes = recvExact(4);
         if (keyBytes == null) return null;
 
-        // Read 4 bytes for length
         byte[] lengthBytes = recvExact(4);
         if (lengthBytes == null) return null;
 
         ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);
         int length = lengthBuffer.getInt();
 
-        // Read exact value bytes
         byte[] valueBytes = recvExact(length);
         if (valueBytes == null) return null;
 
-        // Parse key (remove null padding)
         int keyLength = 4;
         for (int i = 0; i < 4; i++) {
             if (keyBytes[i] == 0) {
@@ -108,28 +90,22 @@ public class JavaExampleClient {
         return new KLVMessage(key, valueBytes);
     }
 
-    /**
-     * Receive exactly numBytes from input stream.
-     *
-     * CRITICAL: InputStream.read() may return fewer bytes than requested!
-     * You MUST loop until you have all bytes.
-     */
     private byte[] recvExact(int numBytes) throws IOException {
         byte[] data = new byte[numBytes];
         int totalRead = 0;
 
-        while (totalRead < numBytes) {
-            int bytesRead = input.read(data, totalRead, numBytes - totalRead);
-            if (bytesRead == -1) {
-                return null; // Connection closed
+            while (totalRead < numBytes) {
+                int bytesRead = input.read(data, totalRead, numBytes - totalRead);
+                if (bytesRead == -1) {
+                    return null;
+                }
+                totalRead += bytesRead;
             }
-            totalRead += bytesRead;
-        }
 
         return data;
     }
 
-    public void interactiveMode() {
+    public void chatRoom() {
         Scanner scanner = new Scanner(System.in);
 
         Thread listener = new Thread(() -> {
@@ -150,7 +126,25 @@ public class JavaExampleClient {
                         message.value.length + ":" + respText);
 
                     if (gui != null) {
-                        gui.appendMessage(respText);
+                        if (message.key.equals("NAME")) {
+                            String[] parts = respText.split(" has changed their name to ");
+                            if (parts.length == 2) {
+                                String oldName = parts[0];
+                                String newName = parts[1];
+                                gui.updateUserName(oldName, newName);
+                            }
+                        }
+                        
+                        if (message.key.equals("READ")) {
+                            String[] historyMessages = respText.split("\n");
+                            for (String msg : historyMessages) {
+                                if (!msg.trim().isEmpty()) {
+                                    gui.appendHistoryMessage(msg);
+                                }
+                            }
+                        } else {
+                            gui.appendMessage(respText);
+                        }
                     }
            
                     System.out.print("> ");
@@ -163,7 +157,11 @@ public class JavaExampleClient {
         listener.setDaemon(true);
         listener.start();
 
-        send("JOIN", "");
+        if (username == null)
+            send("JOIN", "");
+        else
+            send("JOIN", username);
+
         while (true) {
             try {
                 System.out.print("\n> ");
@@ -194,23 +192,23 @@ public class JavaExampleClient {
                         send("NAME", parts[1]);
                         break;
 
-                    case "send":
+                    case "msg":
                         if (parts.length < 2) {
-                            System.out.println("Usage: send <text>");
+                            System.out.println("Usage: msg <text>");
                             continue;
                         }
-                        send("SEND", parts[1]);
+                        send("MSG", parts[1]);
                         break;
 
                     case "time":
                         send("TIME", "");
                         break;
-                    case "hist":
-                        send("HIST", "");
+                    case "read":
+                        send("READ", "");
                         break;
                     default:
                         System.out.println("Unknown command: " + command);
-                        System.out.println("Available: name, send, time, hist, quit");
+                        System.out.println("Available: name, msg, time, read, quit");
                 }
 
             } catch (Exception e) {
@@ -231,10 +229,6 @@ public class JavaExampleClient {
         }
     }
 
-    /**
-     * Convert byte array to hex string with spaces between bytes.
-     * Example: [0x48, 0x45, 0x4C, 0x4F] -> "48 45 4c 4f"
-     */
     public static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < bytes.length; i++) {
@@ -246,9 +240,6 @@ public class JavaExampleClient {
         return sb.toString();
     }
 
-    /**
-     * Simple KLV message structure
-     */
     static class KLVMessage {
         String key;
         byte[] value;
@@ -259,9 +250,6 @@ public class JavaExampleClient {
         }
     }
 
-    /**
-     * Represents a parsed response
-     */
     static class KLVResponse {
         String key;
         String text;
@@ -275,9 +263,7 @@ public class JavaExampleClient {
     public static void main(String[] args) {
         String host = "localhost";
         int port = 9001;
-        String mode = "interactive";
 
-        // Parse arguments
         if (args.length > 0) {
             host = args[0];
         }
@@ -290,20 +276,21 @@ public class JavaExampleClient {
             }
         }
         if (args.length > 2) {
-            mode = args[2];
+            username = args[2];
         }
 
         JavaExampleClient client = new JavaExampleClient(host, port);
         
         ClientGui gui = new ClientGui(host, port);
         client.setGui(gui);
+        gui.setClient(client);
 
         if (!client.connect()) {
             System.exit(1);
         }
 
         try {
-            client.interactiveMode();
+            client.chatRoom();
         } finally {
             client.close();
         }

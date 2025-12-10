@@ -10,23 +10,6 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Java KLV Example Server - Educational Demo
- *
- * This server implements a SIMPLE protocol using KLV that is NOT the chat protocol.
- * It demonstrates:
- * - Multi-threaded client handling
- * - KLV encoding/decoding over sockets
- * - Basic request/response pattern
- *
- * Protocol Commands (NOT your assignment!):
- * - HELO:length:name → Server responds WELC:length:Hello, name!
- * - ECHO:length:text → Server responds ECHO:length:text
- * - TIME:0: → Server responds TIME:length:timestamp
- * - QUIT:0: → Server disconnects client
- *
- * Students should study this architecture and apply it to their chat protocol.
- */
 public class JavaExampleServer {
 
     private final String host;
@@ -58,8 +41,8 @@ public class JavaExampleServer {
         System.out.println("\nThis is an EXAMPLE server, NOT the chat protocol!");
         System.out.println("\nSupported commands:");
         System.out.println("  NAME:length:name   - send back new username  ");
-        System.out.println("  SEND:length:text   - Send back text");
-        System.out.println("  HIST:length:text   - send back messages");
+        System.out.println("  MSG:length:text    - Send back text");
+        System.out.println("  READ:length:text   - send back messages");
         System.out.println("  TIME:0:            - Get server time");
         System.out.println("  QUIT:0:            - Disconnect");
         System.out.println("\nPress Ctrl+C to stop.");
@@ -73,7 +56,6 @@ public class JavaExampleServer {
                 InetSocketAddress address = (InetSocketAddress) clientSocket.getRemoteSocketAddress();
                 System.out.println("\n[Client " + clientId + "] Connected from " + address);
 
-                // Handle each client in a separate thread
                 numOfClients++;
                 Thread clientThread = new Thread(new ClientHandler(clientSocket, clientId));
                 clientThread.setDaemon(true);
@@ -115,9 +97,6 @@ public class JavaExampleServer {
         }
     }
     
-    /**
-     * Handler for individual client connections
-     */
     private class ClientHandler implements Runnable {
         private final Socket socket;
         private final int clientId;
@@ -139,10 +118,9 @@ public class JavaExampleServer {
                 }
 
                 while (running && !socket.isClosed()) {
-                    // Read KLV message
                     KLVMessage message = readKLVFromSocket(input);
                     if (message == null) {
-                        break; // Connection closed
+                        break;
                     }
 
                     String valueStr = new String(message.value, StandardCharsets.UTF_8);
@@ -150,23 +128,26 @@ public class JavaExampleServer {
                     System.out.println("[Client " + clientId + "] Received: " +
                         message.key + ":" + message.value.length + ":" + valueStr);
 
-                    // Process command
                     byte[] response = processCommand(message.key, message.value);
                     if (response == null) {
-                        break; // Client requested quit
+                        break;
                     }
 
                     System.out.println("[DEBUG] Raw bytes sent: " + JavaExampleServer.bytesToHex(response));
 
-                    if (message.key.equals("HIST")) {
+                    if (message.key.equals("MSG")) {
+                        KLVExample.KLVMessage respMsg = KLVExample.decodeKLV(response);
+                        String responseValue = new String(respMsg.value, StandardCharsets.UTF_8);
+                        addToHistory(responseValue);
+                    }
+
+                    if (message.key.equals("READ")) {
                         output.write(response);
                         output.flush();
                     } else {
                         broadCastResponse(response);
-                        addToHistory(valueStr);
                     }
 
-                    // If it was a quit, disconnect
                     if (message.key.equals("QUIT")) {
                         break;
                     }
@@ -175,7 +156,6 @@ public class JavaExampleServer {
             } catch (Exception e) {
                 System.err.println("[Client " + clientId + "] Error: " + e.getMessage());
             } finally {
-                // Remove this client's output stream from the list
                 if (output != null) {
                     synchronized (outputStreamList) {
                         outputStreamList.remove(output);
@@ -184,34 +164,37 @@ public class JavaExampleServer {
                 try {
                     socket.close();
                 } catch (IOException e) {
-                    // Ignore
                 }
                 System.out.println("[Client " + clientId + "] Disconnected");
             }
         }
 
         private byte[] processCommand(String key, byte[] value) throws Exception {
+            String name = null;
             switch (key) {
                 case "JOIN":
+                    name = new String(value,  StandardCharsets.UTF_8);
+                    if (name.length() != 0)
+                        username = name;
                     String joinMsg = username + " joined";
                     return KLVExample.encodeKLV("JOIN", joinMsg.getBytes(StandardCharsets.UTF_8));
                 case "NAME":
-                    String name = new String(value, StandardCharsets.UTF_8);
+                    name = new String(value, StandardCharsets.UTF_8);
                     String greeting = username + " has changed their name to " + name;
                     username = name;
                     return KLVExample.encodeKLV("NAME", greeting.getBytes(StandardCharsets.UTF_8));
 
-                case "SEND":
+                case "MSG":
                     String valueStr = new String(value, StandardCharsets.UTF_8);
                     valueStr = username + ":\t" + valueStr;
-                    return KLVExample.encodeKLV("SEND", valueStr.getBytes(StandardCharsets.UTF_8));
+                    return KLVExample.encodeKLV("MSG", valueStr.getBytes(StandardCharsets.UTF_8));
 
                 case "TIME":
                     String timestamp = LocalDateTime.now().format(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                     return KLVExample.encodeKLV("TIME", timestamp.getBytes(StandardCharsets.UTF_8));
                     
-                case "HIST":
+                case "READ":
                     List<String> history = getHistory();
                     String historyText;
                     if (history.isEmpty()) {
@@ -219,7 +202,7 @@ public class JavaExampleServer {
                     } else {
                         historyText = String.join("\n", history);
                     }
-                    return KLVExample.encodeKLV("HIST", historyText.getBytes(StandardCharsets.UTF_8));
+                    return KLVExample.encodeKLV("READ", historyText.getBytes(StandardCharsets.UTF_8));
                     
                 case "QUIT":
                     String leaving = username + " has left :(";
@@ -232,22 +215,18 @@ public class JavaExampleServer {
         }
 
         private KLVMessage readKLVFromSocket(InputStream input) throws IOException {
-            // Read 4 bytes for key
             byte[] keyBytes = recvExact(input, 4);
             if (keyBytes == null) return null;
 
-            // Read 4 bytes for length
             byte[] lengthBytes = recvExact(input, 4);
             if (lengthBytes == null) return null;
 
             ByteBuffer lengthBuffer = ByteBuffer.wrap(lengthBytes);
             int length = lengthBuffer.getInt();
 
-            // Read exact value bytes
             byte[] valueBytes = recvExact(input, length);
             if (valueBytes == null) return null;
 
-            // Parse key (remove null padding)
             int keyLength = 4;
             for (int i = 0; i < 4; i++) {
                 if (keyBytes[i] == 0) {
@@ -260,11 +239,6 @@ public class JavaExampleServer {
             return new KLVMessage(key, valueBytes);
         }
 
-        /**
-         * Receive exactly numBytes from input stream.
-         * IMPORTANT: InputStream.read() may return fewer bytes than requested!
-         * Always loop until you have all bytes.
-         */
         private byte[] recvExact(InputStream input, int numBytes) throws IOException {
             byte[] data = new byte[numBytes];
             int totalRead = 0;
@@ -272,7 +246,7 @@ public class JavaExampleServer {
             while (totalRead < numBytes) {
                 int bytesRead = input.read(data, totalRead, numBytes - totalRead);
                 if (bytesRead == -1) {
-                    return null; // Connection closed
+                    return null;
                 }
                 totalRead += bytesRead;
             }
@@ -282,10 +256,6 @@ public class JavaExampleServer {
         }
     }
 
-    /**
-     * Convert byte array to hex string with spaces between bytes.
-     * Example: [0x48, 0x45, 0x4C, 0x4F] -> "48 45 4c 4f"
-     */
     public static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < bytes.length; i++) {
@@ -297,9 +267,6 @@ public class JavaExampleServer {
         return sb.toString();
     }
 
-    /**
-     * Simple KLV message structure
-     */
     static class KLVMessage {
         String key;
         byte[] value;
@@ -314,15 +281,13 @@ public class JavaExampleServer {
     public static void broadCastResponse(byte[] response) {
         synchronized (outputStreamList) {
             System.out.println("[Broadcast] Sending to " + outputStreamList.size() + " client(s)");
-            // Use iterator to safely remove dead streams while iterating
             outputStreamList.removeIf(output -> {
                 try {
                     output.write(response);
                     output.flush();
                     System.out.println("[Broadcast] Successfully sent to one client");
-                    return false; // Keep this stream
+                    return false;
                 } catch (Exception e) {
-                    // Stream is dead, remove it
                     System.err.println("[Broadcast] Failed to send to client: " + e.getMessage());
                     return true;
                 }
@@ -345,7 +310,6 @@ public class JavaExampleServer {
 
         JavaExampleServer server = new JavaExampleServer("0.0.0.0", port);
 
-        // Handle Ctrl+C gracefully
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\n\nShutting down server...");
             server.stop();
