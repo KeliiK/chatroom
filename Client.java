@@ -14,7 +14,7 @@ public class Client {
     private InputStream input;
     private OutputStream output;
     private ClientGui gui;
-    private static String username;
+    private String username;
 
     public Client(String host, int port) {
         this.host = host;
@@ -25,13 +25,21 @@ public class Client {
         this.gui = gui;
     }
 
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
     public boolean connect() {
         try {
             socket = new Socket(host, port);
             input = socket.getInputStream();
             output = socket.getOutputStream();
 
-            Socket.out.println("=".repeat(70));
+            System.out.println("=".repeat(70));
             System.out.println("Connected to " + host + ":" + port);
             System.out.println("=".repeat(70));
             System.out.println("\nThis is an EXAMPLE client, NOT the chat protocol!");
@@ -51,6 +59,10 @@ public class Client {
     }
 
     public void send(String key, String valueStr) {
+        if (output == null) {
+            System.err.println("! Error sending : not connected (output is null)");
+            return;
+        }
         try {
             byte[] message = KLVExample.encodeKLV(key,
                     valueStr.getBytes(StandardCharsets.UTF_8));
@@ -127,19 +139,32 @@ public class Client {
 
                     // Handle RESP messages (status codes)
                     if (message.key.equals("RESP")) {
-                        try {
-                            int statusCode = Integer.parseInt(respText);
-                            if (statusCode == 200) {
-                                System.out.println("[Status] Success (200)");
-                            } else if (statusCode == 400) {
-                                System.err.println("[Status] Bad Request (400) - Message failed");
-                            } else if (statusCode == 403) {
-                                System.err.println("[Status] Forbidden (403) - Operation not allowed");
-                            } else {
-                                System.out.println("[Status] Code: " + statusCode);
+                        String statusCode = respText.trim();
+
+                        if ("200".equals(statusCode)) {
+                            System.out.println("[Status Success (200)");
+                        } else if ("400".equals(statusCode)) {
+                            System.err.println("[Status] Bad Request (400) - Message failed");
+                        } else if ("403".equals(statusCode)) {
+                            System.err.println("[Status] Forbidden (403) - Operation not allowed");
+                        } else {
+                            System.out.println("[Status] Code: " + statusCode);
+                        }
+                        System.out.print("> ");
+                        continue;
+                    }
+
+                    if (message.key.equals("PFP")) {
+                        if (gui != null) {
+                            String[] parts = respText.split(":", 2);
+                            if (parts.length == 2) {
+                                String user = parts[0];
+                                try {
+                                    int indx = Integer.parseInt(parts[1]);
+                                    gui.setUserPfp(user, indx);
+                                } catch (NumberFormatException ignored) {
+                                }
                             }
-                        } catch (NumberFormatException e) {
-                            System.err.println("[Status] Invalid status code: " + respText);
                         }
                         System.out.print("> ");
                         continue;
@@ -210,6 +235,7 @@ public class Client {
                             continue;
                         }
                         send("NAME", parts[1]);
+                        username = parts[1];
                         break;
 
                     case "msg":
@@ -287,6 +313,7 @@ public class Client {
         if (args.length > 0) {
             host = args[0];
         }
+
         if (args.length > 1) {
             try {
                 port = Integer.parseInt(args[1]);
@@ -295,11 +322,12 @@ public class Client {
                 System.exit(1);
             }
         }
-        if (args.length > 2) {
-            username = args[2];
-        }
 
         Client client = new Client(host, port);
+
+        if (args.length > 2) {
+            client.setUsername(args[2]);
+        }
 
         ClientGui gui = new ClientGui(host, port);
         client.setGui(gui);

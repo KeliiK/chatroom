@@ -14,7 +14,7 @@ public class ClientGui extends JFrame {
 
     public ClientGui(String host, int port) {
         super("ClientGui");
-
+        
         pfps[0] = loadAndScaleIcon("cats/cat1.png", 24);
         pfps[1] = loadAndScaleIcon("cats/cat2.png", 24);
         pfps[2] = loadAndScaleIcon("cats/cat3.png", 24);
@@ -34,7 +34,7 @@ public class ClientGui extends JFrame {
         JLabel title = new JLabel("Chatroom");
         title.setForeground(Color.WHITE);
         title.setFont(new Font("SansSerif", Font.BOLD, 18));
-
+        
         JPanel leftHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
         leftHeader.setOpaque(false);
         leftHeader.add(title);
@@ -47,14 +47,29 @@ public class ClientGui extends JFrame {
         pfpButton.setOpaque(true);
         pfpButton.setBorderPainted(false);
         pfpButton.setFocusPainted(false);
-
+        
         pfpButton.addActionListener(e -> {
+            if (client == null) {
+                return;
+            }
+
+            String myUser = client.getUsername();
+            if (myUser == null || myUser.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Set name by using name button before picking another pfp",
+                        "no user",
+                        JOptionPane.WARNING_MESSAGE
+                );
+                return;
+            }
+
             Object[] options = new Object[pfps.length];
             for (int i = 0; i < pfps.length; i++) {
                 options[i] = pfps[i];
             }
-
-            JOptionPane.showOptionDialog(
+            
+            int choice = JOptionPane.showOptionDialog(
                     this,
                     "Choose a uglee cat pfp",
                     "pfps",
@@ -64,6 +79,48 @@ public class ClientGui extends JFrame {
                     options,
                     options[0]
             );
+
+            if (choice < 0 ){
+                return;
+            }
+
+            userPfpMap.put(myUser,choice);
+            updatePfpIconsForUser(myUser);
+
+            client.send("PFP", String.valueOf(choice));
+            /*
+            String[] knownUsers = userPfpMap.keySet().toArray(new String[0]);
+            String targetUser;
+
+            if (knownUsers.length == 0) {
+                targetUser = JOptionPane.showInputDialog(
+                        this,
+                        "Enter user to assign pfp:",
+                        "Set pfp",
+                        JOptionPane.PLAIN_MESSAGE
+                );
+            } else {
+                targetUser = (String) JOptionPane.showInputDialog(
+                        this,
+                        "pfp change",
+                        "set pfp",
+                        JOptionPane.PLAIN_MESSAGE,
+                        null,
+                        knownUsers,
+                        knownUsers[0]
+                );
+            }
+            if (targetUser != null && !targetUser.trim().isEmpty()) {
+                String user = targetUser.trim();
+
+                userPfpMap.put(user, choice);
+                updatePfpIconsForUser(user);
+
+                if (client != null) {
+                    String payload = user + ":" + choice;
+                    client.send("PFP", payload);
+                }
+            } */
         });
 
         header.add(leftHeader, BorderLayout.WEST);
@@ -139,7 +196,9 @@ public class ClientGui extends JFrame {
             if (client != null) {
                 String newName = JOptionPane.showInputDialog(this, "Enter new name:", "Change Name", JOptionPane.PLAIN_MESSAGE);
                 if (newName != null && !newName.trim().isEmpty()) {
-                    client.send("NAME", newName.trim());
+                    String trimmed = newName.trim();
+                    client.send("NAME", trimmed);
+                    client.setUsername(trimmed);
                 }
             }
         });
@@ -159,12 +218,12 @@ public class ClientGui extends JFrame {
                 input.setBackground(Color.GRAY);
                 input.setForeground(Color.WHITE);
 
-                sendButton.setForeground(Color.BLACK);
-                readButton.setForeground(Color.BLACK);
-                nameButton.setForeground(Color.BLACK);
-                exitButton.setForeground(Color.BLACK);
-                darkModeButton.setForeground(Color.BLACK);
-
+                sendButton.setForeground(Color.WHITE);
+                readButton.setForeground(Color.WHITE);
+                nameButton.setForeground(Color.WHITE);
+                exitButton.setForeground(Color.WHITE);
+                darkModeButton.setForeground(Color.WHITE);
+                
                 pfpButton.setBackground(header.getBackground());
                 pfpButton.setForeground(Color.WHITE);
 
@@ -176,7 +235,7 @@ public class ClientGui extends JFrame {
 
                 darkModeButton.setText("Light Mode");
                 dark = true;
-
+                
                 updateMessageContainersBackground();
                 updateUsernameLabelsColor(Color.WHITE);
             }
@@ -192,7 +251,7 @@ public class ClientGui extends JFrame {
                 nameButton.setForeground(Color.BLACK);
                 exitButton.setForeground(Color.BLACK);
                 darkModeButton.setForeground(Color.BLACK);
-
+                
                 pfpButton.setBackground(header.getBackground());
                 pfpButton.setForeground(Color.WHITE);
 
@@ -205,7 +264,7 @@ public class ClientGui extends JFrame {
 
                 darkModeButton.setText("Dark Mode");
                 dark = false;
-
+                
                 updateMessageContainersBackground();
                 updateUsernameLabelsColor(Color.GRAY);
             }
@@ -239,7 +298,7 @@ public class ClientGui extends JFrame {
             messageContainer.setLayout(new BoxLayout(messageContainer, BoxLayout.X_AXIS));
             messageContainer.setBackground(messagePanel.getBackground());
             messageContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
-
+            
             if (!isJoinMessage && !isNameChangeMessage && !isLeaveMessage) {
                 RoundImageLabel profilePic = new RoundImageLabel(30);
                 profilePic.setPreferredSize(new Dimension(30, 30));
@@ -252,12 +311,12 @@ public class ClientGui extends JFrame {
                 messageContainer.add(profilePic);
                 messageContainer.add(Box.createHorizontalStrut(8));
             }
-
+            
             JPanel textContainer = new JPanel();
             textContainer.setLayout(new BoxLayout(textContainer, BoxLayout.Y_AXIS));
             textContainer.setBackground(messagePanel.getBackground());
             textContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
-
+            
             JLabel usernameLabel = new JLabel(username != null ? username : "");
             usernameLabel.setFont(new Font(usernameLabel.getFont().getName(), Font.PLAIN, 10));
             usernameLabel.setForeground(dark ? Color.WHITE : Color.BLACK);
@@ -270,16 +329,16 @@ public class ClientGui extends JFrame {
             label.setBackground(new Color(230, 230, 230));
             label.setAlignmentX(Component.LEFT_ALIGNMENT);
             textContainer.add(label);
-
+            
             messageContainer.add(textContainer);
             messagePanel.add(messageContainer);
-
+            
             messagePanel.revalidate();
             Dimension prefSize = messageContainer.getPreferredSize();
             messageContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, prefSize.height));
             Dimension textPrefSize = textContainer.getPreferredSize();
             textContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, textPrefSize.height));
-
+            
             messagePanel.revalidate();
             messagePanel.repaint();
 
@@ -302,7 +361,7 @@ public class ClientGui extends JFrame {
         messagePanel.revalidate();
         messagePanel.repaint();
     }
-
+    
     private void updateContainerBackgrounds(JPanel container) {
         for (Component comp : container.getComponents()) {
             if (comp instanceof JPanel) {
@@ -312,7 +371,7 @@ public class ClientGui extends JFrame {
             }
         }
     }
-
+    
     private void updateUsernameLabelsColor(Color color) {
         for (Component comp : messagePanel.getComponents()) {
             if (comp instanceof JPanel) {
@@ -321,7 +380,7 @@ public class ClientGui extends JFrame {
         }
         messagePanel.repaint();
     }
-
+    
     private void updateUsernameLabelsInContainer(JPanel container, Color color) {
         for (Component comp : container.getComponents()) {
             if (comp instanceof JLabel && !(comp instanceof RoundedLabel)) {
@@ -331,7 +390,7 @@ public class ClientGui extends JFrame {
             }
         }
     }
-
+    
     private int getPfpIndexForUser(String username) {
         if (username == null || username.isEmpty()) {
             return 0;
@@ -343,36 +402,36 @@ public class ClientGui extends JFrame {
         }
         return userPfpMap.get(username);
     }
-
+    
     public void updateUserName(String oldName, String newName) {
         if (oldName != null && !oldName.isEmpty() && userPfpMap.containsKey(oldName)) {
             int pfpIndex = userPfpMap.remove(oldName);
             userPfpMap.put(newName, pfpIndex);
         }
     }
-
+    
     public void appendMessage(String message) {
         addLabel(message);
     }
-
+    
     public void appendHistoryMessage(String text) {
         SwingUtilities.invokeLater(() -> {
             String username = null;
             String messageText = text;
-
+            
             if (text.contains(":\t")) {
                 int separatorIndex = text.indexOf(":\t");
                 username = text.substring(0, separatorIndex);
                 messageText = text.substring(separatorIndex + 2);
             }
-
+            
             messagePanel.add(Box.createVerticalStrut(10));
-
+            
             JPanel messageContainer = new JPanel();
             messageContainer.setLayout(new BoxLayout(messageContainer, BoxLayout.X_AXIS));
             messageContainer.setBackground(messagePanel.getBackground());
             messageContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
-
+            
             RoundImageLabel profilePic = new RoundImageLabel(30);
             profilePic.setPreferredSize(new Dimension(30, 30));
             profilePic.setMaximumSize(new Dimension(30, 30));
@@ -383,12 +442,12 @@ public class ClientGui extends JFrame {
             }
             messageContainer.add(profilePic);
             messageContainer.add(Box.createHorizontalStrut(8));
-
+            
             JPanel textContainer = new JPanel();
             textContainer.setLayout(new BoxLayout(textContainer, BoxLayout.Y_AXIS));
             textContainer.setBackground(messagePanel.getBackground());
             textContainer.setAlignmentX(Component.LEFT_ALIGNMENT);
-
+            
             JLabel usernameLabel = new JLabel(username != null ? username : "");
             usernameLabel.setFont(new Font(usernameLabel.getFont().getName(), Font.PLAIN, 10));
             usernameLabel.setForeground(dark ? Color.WHITE : Color.BLACK);
@@ -396,24 +455,24 @@ public class ClientGui extends JFrame {
             usernameLabel.setOpaque(false);
             usernameLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
             textContainer.add(usernameLabel);
-
+            
             RoundedLabel label = new RoundedLabel(messageText, 20);
             label.setBackground(new Color(200, 220, 240));
             label.setAlignmentX(Component.LEFT_ALIGNMENT);
             textContainer.add(label);
-
+            
             messageContainer.add(textContainer);
             messagePanel.add(messageContainer);
-
+            
             messagePanel.revalidate();
             Dimension prefSize = messageContainer.getPreferredSize();
             messageContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, prefSize.height));
             Dimension textPrefSize = textContainer.getPreferredSize();
             textContainer.setMaximumSize(new Dimension(Integer.MAX_VALUE, textPrefSize.height));
-
+            
             messagePanel.revalidate();
             messagePanel.repaint();
-
+            
             JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, messagePanel);
             if (scrollPane != null) {
                 JScrollBar vertical = scrollPane.getVerticalScrollBar();
@@ -432,14 +491,56 @@ public class ClientGui extends JFrame {
         });
     }
 
+    public void setUserPfp(String username, int index) {
+        if (username == null || username.isEmpty()) return;
+        if (index < 0 || index >= pfps.length) return;
+
+        userPfpMap.put(username, index);
+        updatePfpIconsForUser(username);
+    }
+
+    private void updatePfpIconsForUser(String username) {
+        Integer indx = userPfpMap.get(username);
+        if (indx == null || indx < 0 || indx >= pfps.length) return;
+        Image newImg = pfps[indx].getImage();
+
+        for(Component comp : messagePanel.getComponents()) {
+            if (!(comp instanceof JPanel)) continue;
+            JPanel messageContainer = (JPanel) comp;
+
+            JLabel usernameLabel = null;
+            RoundImageLabel avatar = null;
+
+            for (Component child : messageContainer.getComponents()) {
+                if (child instanceof  RoundImageLabel) {
+                    avatar = (RoundImageLabel) child;
+                }
+                if (child instanceof JPanel) {
+                    JPanel inner = (JPanel) child;
+                    for (Component innerChild : inner.getComponents()) {
+                        if (innerChild instanceof JLabel && !(innerChild instanceof RoundedLabel)) {
+                            usernameLabel = (JLabel) innerChild;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (usernameLabel != null && avatar != null &&
+            username.equals(usernameLabel.getText())) {
+                avatar.setImage(newImg);
+            }
+        }
+        messagePanel.repaint();
+    }
+
     private ImageIcon loadAndScaleIcon(String path, int size) {
         ImageIcon icon = new ImageIcon(path);
         Image img = icon.getImage().getScaledInstance(size, size, Image.SCALE_SMOOTH);
         return new ImageIcon(img);
     }
-
+    
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new ClientGui("localhost", 8080));
+        SwingUtilities.invokeLater(() -> new ClientGui("localhost", 7500));
 
 
     }
@@ -448,27 +549,27 @@ public class ClientGui extends JFrame {
 class RoundImageLabel extends JPanel {
     private Image image;
     private int size;
-
+    
     public RoundImageLabel(int size) {
         this.size = size;
         setPreferredSize(new Dimension(size, size));
         setOpaque(false);
     }
-
+    
     public void setImage(String imagePath) {
         image = new ImageIcon(imagePath).getImage();
         repaint();
     }
-
+    
     public void setImage(Image img) {
         image = img;
         repaint();
     }
-
+    
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-
+        
         if (image == null) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
@@ -478,16 +579,16 @@ class RoundImageLabel extends JPanel {
             g2.dispose();
             return;
         }
-
+        
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                 RenderingHints.VALUE_ANTIALIAS_ON);
-
+        
         Shape circle = new Ellipse2D.Double(0, 0, size, size);
         g2.setClip(circle);
-
+        
         g2.drawImage(image, 0, 0, size, size, this);
-
+        
         g2.dispose();
     }
 }
